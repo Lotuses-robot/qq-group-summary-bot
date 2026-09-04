@@ -4,7 +4,7 @@
  * 域内 4 条规则按原代码顺序排列（顺序即优先级）：
  *   1. 学习/纠正/记/定义 词=释义（= ＝ ： : 或空白分隔，词 ≤20 字符，释义 trim 后不足 2 字拒学）
  *   2. 忘记/删除/删 词（存在则删、否则如实提示）
- *   3. 查词/词典查/释义 词（子串包含命中，忽略大小写，见 core/lingo.js lookup）
+ *   3. 查词/词典查/释义 词（子串包含命中，忽略大小写，见 core/knowledge/lingo.js lookup）
  *   4. 整串 词典/词条数（列全部词条，最多展示前 30 条）
  * 全部不命中返回 null 交下一个优先级插件（ark 600），与旧分发表逐条判定等价——
  * 跨域词头无碰撞（本域词头：学习/纠正/记/定义/忘记/删除/删/查词/词典查/释义/词典/词条数）。
@@ -12,7 +12,7 @@
  * 依赖：logger；服务经 ctx 注入（与旧 commands.js 相同，见注册处 runtime S12）。
  * 实例化点：src/plugins/index.js 以 descriptor 形式随 commandPlugins 数组交付 runtime 注册。
  */
-import { log } from '../core/logger.js';
+import { log } from '../core/platform/logger.js';
 import { PRIORITY } from '../core/registry.js';
 
 /**

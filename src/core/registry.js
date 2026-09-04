@@ -12,7 +12,7 @@
  * 对外导出：class PluginRegistry + PRIORITY 常量表。
  * 读写数据：不直接读写任何数据；插件的消息/数据能力由 runtime 注入的 ctx 提供。
  */
-import { log } from './logger.js';
+import { log } from './platform/logger.js';
 
 /** 插件优先级带（原 index.js 路由链顺序的编码；数值越大越先分发，见 refactor-proposal） */
 export const PRIORITY = Object.freeze({

@@ -1,5 +1,5 @@
 /**
- * P0 行为基线：Analytics SQLite 分析层（src/analytics.js）。
+ * P0 行为基线：Analytics SQLite 分析层（src/core/platform/analytics.js）。
  *
  * 锁定目标：_ensureImported 惰性整库导入（坏行跳过、重复行 INSERT OR IGNORE 去重）、
  * record 实时镜像、topActive 的窗口与「排除 未知/空名」口径、groupStats 口径、
@@ -11,8 +11,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { Analytics } from '../../src/core/analytics.js';
-import { localDate } from '../../src/core/store.js';
+import { Analytics } from '../../src/core/platform/analytics.js';
+import { localDate } from '../../src/core/platform/store.js';
 import { cleanupTmpDirs, makeTmp, seedMessages, silenceLog, trackDbClose } from '../helpers.js';
 
 after(silenceLog());

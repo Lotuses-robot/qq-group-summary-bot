@@ -8,7 +8,7 @@
  * 读写数据：无本地读写；抓取 zh.moegirl.org.cn 网页（浏览器 UA 防反爬 + 正文容器
  * 正则提取），仅 1.5s 最小间隔节流——fetch 无超时（见 architecture.md §8 坑 6）。
  */
-import { log } from './logger.js';
+import { log } from '../platform/logger.js';
 import { extractKeywords } from './wiki.js';
 
 const API_URL = 'https://zh.moegirl.org.cn/api.php';

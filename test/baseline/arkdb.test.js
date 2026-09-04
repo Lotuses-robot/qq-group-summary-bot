@@ -1,5 +1,5 @@
 /**
- * P0 行为基线：ArkDB 本地方舟库（src/arkdb.js）。
+ * P0 行为基线：ArkDB 本地方舟库（src/core/knowledge/arkdb.js）。
  *
  * 锁定目标（全部用 test/helpers.js 的合成夹具，无真实 17MB 数据依赖）：
  * 四表懒加载与缺表容错、alias 索引（名称/代号/档案名）、findByName 短名约束与子串匹配、
@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { ArkDB } from '../../src/core/arkdb.js';
+import { ArkDB } from '../../src/core/knowledge/arkdb.js';
 import { cleanupTmpDirs, makeTmp, silenceLog, todayLabel, withRand, writeArkTables } from '../helpers.js';
 
 after(silenceLog());

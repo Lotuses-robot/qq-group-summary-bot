@@ -19,7 +19,7 @@
  * 实例化点：core/runtime.js createApp 装配期。
  * 读写数据：联网下载写盘 data/ark/（原子写入 + 旧文件 .bak 备份）；arkdb 内存热重载；可能群发播报。
  */
-import { log, err } from '../core/logger.js';
+import { log, err } from '../core/platform/logger.js';
 import { PRIORITY } from '../core/registry.js';
 
 /**

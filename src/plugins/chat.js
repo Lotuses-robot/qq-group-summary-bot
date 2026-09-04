@@ -12,15 +12,15 @@
  *
  * 注意：brain.lingo/.arkdb 与 runtime 共享单例是同一对象——指令插件（plugins/）与 WebUI
  * 经 ctx/getLingo() 借用的也是同一实例。
- * 依赖：logger、core/wiki.js 纯函数；实例化点：core/runtime.js 装配（deps 注入）。
+ * 依赖：logger、core/knowledge/wiki.js 纯函数；实例化点：core/runtime.js 装配（deps 注入）。
  * 读写数据：读 lingo/arkdb/cache（注入实例）；调 LLM（fetch）；仅内存写 groupHistory/groupSpeakers。
  *
  * P3c 追加 chat 分发插件（createChatPlugin）：原路由 S13 语义内化为分发带末端（PRIORITY.chat
  * 300）——handleMessage 恒返回 true 消费消息并自驱异步 brain.chat（不 await），LLM 兜底仍
  * 最后执行、失败回退文案照发；runtime 不再有「dispatch 落空 → 直调 brain」的分叉。
  */
-import { log, err } from '../core/logger.js';
-import { isArknightsRelated, extractKeywords } from '../core/wiki.js';
+import { log, err } from '../core/platform/logger.js';
+import { isArknightsRelated, extractKeywords } from '../core/knowledge/wiki.js';
 import { PRIORITY } from '../core/registry.js';
 
 // 来源可信度权重（分数越高越可信）

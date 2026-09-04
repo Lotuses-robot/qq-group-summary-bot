@@ -15,9 +15,9 @@ import path from 'node:path';
 
 import { PluginRegistry } from '../../src/core/registry.js';
 import { commandPlugins } from '../../src/plugins/index.js';
-import { LingoStore } from '../../src/core/lingo.js';
-import { ArkDB } from '../../src/core/arkdb.js';
-import { Analytics } from '../../src/core/analytics.js';
+import { LingoStore } from '../../src/core/knowledge/lingo.js';
+import { ArkDB } from '../../src/core/knowledge/arkdb.js';
+import { Analytics } from '../../src/core/platform/analytics.js';
 import { makeTmp, cleanupTmpDirs, silenceLog, todayLabel, trackDbClose, withRand, writeArkTables } from '../helpers.js';
 
 after(silenceLog());

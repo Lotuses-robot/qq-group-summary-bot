@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { log } from './logger.js';
+import { log } from '../platform/logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CACHE_FILE = path.resolve(__dirname, '..', '..', 'data', 'knowledge_cache.json');

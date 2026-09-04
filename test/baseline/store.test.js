@@ -1,5 +1,5 @@
 /**
- * P0 行为基线：MessageStore 与纯文本工具（src/store.js）。
+ * P0 行为基线：MessageStore 与纯文本工具（src/core/platform/store.js）。
  *
  * 锁定目标：JSONL 按群按天追加写、写入幂等闸、loadFromDisk 坏行去重重写、
  * lastSeen 全局单值只增不减、lastSummaryAt 持久化、collectSince/collectRange
@@ -15,7 +15,7 @@ import path from 'node:path';
 
 import {
   MessageStore, segmentToText, extractText, localDate, hhmm, fmtFull,
-} from '../../src/core/store.js';
+} from '../../src/core/platform/store.js';
 import { cleanupTmpDirs, makeTmp, seedMessages, silenceLog } from '../helpers.js';
 
 after(silenceLog());

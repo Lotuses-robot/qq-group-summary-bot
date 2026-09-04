@@ -1,5 +1,5 @@
 /**
- * P0 行为基线：LingoStore 词典（src/lingo.js）。
+ * P0 行为基线：LingoStore 词典（src/core/knowledge/lingo.js）。
  *
  * 锁定目标：lookup 忽略大小写子串包含匹配（插入序首命中）、learn/delete 全量覆写落盘、
  * 损坏文件降级空词典、entries 公开 Map——commands 与 webui 直读 entries 依赖此面。
@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { LingoStore } from '../../src/core/lingo.js';
+import { LingoStore } from '../../src/core/knowledge/lingo.js';
 import { cleanupTmpDirs, makeTmp, silenceLog } from '../helpers.js';
 
 after(silenceLog());

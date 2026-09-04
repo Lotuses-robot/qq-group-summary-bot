@@ -17,12 +17,12 @@
  * hooks.start → cfg.enabled !== false 时 new WebUI 并 listen（原 runtime.start 末段）；
  * hooks.stop → server.close()（原实现无停服路径、依赖 process.exit，插件化后补上，属无害增强）。
  *
- * 依赖：node:http、core/logger；实例化点：core/runtime.js createApp（startCtx 4 成员闭包注入）。
+ * 依赖：node:http、core/platform/logger；实例化点：core/runtime.js createApp（startCtx 4 成员闭包注入）。
  * 读写数据：读 lingo/arkdb/analytics（经 startCtx.getStatus/getLingo）；写词典经 getLingo()；
  * 刷新触发经 refreshData（桥接 refresh 插件 api，P3b）。
  */
 import http from 'node:http';
-import { log } from '../core/logger.js';
+import { log } from '../core/platform/logger.js';
 
 // 简单的 Web 管理面板（Node 内置 http，零依赖）
 // API: /api/status /api/lingo /api/refresh /api/config

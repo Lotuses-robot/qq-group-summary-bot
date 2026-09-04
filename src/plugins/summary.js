@@ -10,14 +10,14 @@
  * （调用方不 await），概括异步执行；isReady()=false 时照常消费消息但静默跳过执行（同旧 S8）。
  * risk #2 落地：per-group 互斥集（summaryInFlight）随插件实例走（工厂闭包），不放 runtime 全局。
  *
- * 依赖：logger + core/store.js（fmtFull）；服务/配置经 createSummaryPlugin(deps) 注入——
+ * 依赖：logger + core/platform/store.js（fmtFull）；服务/配置经 createSummaryPlugin(deps) 注入——
  * 依赖 runtime 闭包内的就绪标志与配置派生量，故不随 plugins/index.js 静态数组交付，
  * 实例化点：core/runtime.js createApp 装配期就地构造。
  * 读写数据：读消息存储（getLastSummaryAt/collectSince）；经 summarizer 调 LLM 概括；
  * 群发经 client；成功后写 setLastSummaryAt。
  */
-import { log, err } from '../core/logger.js';
-import { fmtFull } from '../core/store.js';
+import { log, err } from '../core/platform/logger.js';
+import { fmtFull } from '../core/platform/store.js';
 import { PRIORITY } from '../core/registry.js';
 
 /**

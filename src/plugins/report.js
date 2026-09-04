@@ -4,7 +4,7 @@
  *
  * 无消息面：仅 hooks 插件（不参与 dispatch——本插件 handleMessage 恒 null；priority 0 使
  * startAll 时排在最后，仅 hooks 的 start/stop 次序有意义，见 refactor-proposal「report 仅 hooks」）。
- * hooks.start → scheduler.start(run)：注册每日 9:00 定时回调（调度循环由 core/scheduler.js 自驱，
+ * hooks.start → scheduler.start(run)：注册每日 9:00 定时回调（调度循环由 core/platform/scheduler.js 自驱，
  * 每天触发一次后自动排下一天）；hooks.stop → scheduler.stop()（停服收尾，旧实现由 runtime 直调，
  * 插件化后调度器归本插件所有，生命周期随 registry.stopAll 逆序停）。
  *
@@ -19,7 +19,7 @@
  * 实例化点：core/runtime.js createApp 装配期。
  * 读写数据：读消息存储（loadFromDisk/collectRange）；经 summarizer 调 LLM 概括；私聊经 client。
  */
-import { log, err } from '../core/logger.js';
+import { log, err } from '../core/platform/logger.js';
 
 /**
  * 每日日报插件描述符构造：{name:'report', priority: 0, handleMessage, hooks:{start,stop}}。

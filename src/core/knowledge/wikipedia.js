@@ -8,7 +8,7 @@
  * 读写数据：无本地读写；调 zh.wikipedia.org/w/api.php 的段落 extract 纯文本，
  * 单请求 10s 超时 + 1.5s 最小间隔节流，失败由 retrieve 捕获记日志。
  */
-import { log } from './logger.js';
+import { log } from '../platform/logger.js';
 import { extractKeywords } from './wiki.js';
 
 const API_URL = 'https://zh.wikipedia.org/w/api.php';

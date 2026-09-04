@@ -8,7 +8,7 @@
  * 读写数据：无本地读写；请求 https://prts.wiki/api.php 的 MediaWiki API，带最小间隔
  * 节流、反爬冷却与 3 次重试（见 _waitForSlot/_get），单请求 12s 超时。
  */
-import { log } from './logger.js';
+import { log } from '../platform/logger.js';
 
 const API_URL = 'https://prts.wiki/api.php';
 const UA = 'PRTS-AI-Bot/1.0 (QQ Group Chat Bot; contact: local)';
