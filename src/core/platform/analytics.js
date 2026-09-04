@@ -20,7 +20,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { log } from './logger.js';
 
-// messages 表镜像 INSERT（_ensureImported 整库导入与 record 实时镜像共用同一语句）
+// messages 表镜像 INSERT（importHistory 的批次导入 _importFile 与 record 实时镜像共用同一语句）
 const INSERT_MSG_SQL = 'INSERT OR IGNORE INTO messages (group_id, msg_id, time, user_id, name, text) VALUES (?,?,?,?,?,?)';
 
 /**
