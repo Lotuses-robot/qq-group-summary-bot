@@ -342,13 +342,14 @@ export class ArkDB {
   }
 
   /**
-   * 在完整提问文本中找已收录干员名并返回其生日（指令「干员生日/生日 名」用）。
+   * 在完整提问文本中找已收录干员名并返回其生日（chat.js 生日类提问的本地快路用——
+   * 「生日 X」指令不经本方法，由 ark 插件直接 findByName 查）。
    * @param {string} keyword - 完整提问文本（含干员名）
    * @returns {{name: string, birthday: string}|null} name 为干员表名、birthday 为
    *   「M月D日」档案原文（档案缺失或未写生日时为 ''）；文本不含任何已收录名字时 null
    */
   searchBirthday(keyword) {
-    // 从关键词提取干员名
+    this.load(); // 自加载（类内其余查询方法的不变量：不依赖调用方先触发过 load）
     const names = [...this.aliasMap.keys()];
     const hit = names.find((n) => keyword.includes(n));
     if (!hit) return null;

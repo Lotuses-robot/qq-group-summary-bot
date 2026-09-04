@@ -28,6 +28,7 @@ const SOURCE_TRUST = {
   lingo: 100,
   prts: 80,
   moegirl: 60,
+  wikipedia: 60, // 与萌娘同为通用百科（默认关、需代理），权重取平
 };
 
 // 简单信号量：限制并发数
@@ -342,7 +343,7 @@ export class ChatBrain {
       try {
         const w = await withTimeout(this.wikipedia.retrieve(question), 10000);
         if (w.context) {
-          scored.push({ source: 'wikipedia', trustLabel: '维基百科', context: w.context, sources: w.sources, score: scoreResult('moegirl', { size: w.context.length }) });
+          scored.push({ source: 'wikipedia', trustLabel: '维基百科', context: w.context, sources: w.sources, score: scoreResult('wikipedia', { size: w.context.length }) });
           log(`[chat] 群 ${groupId} 检索到维基百科: ${w.sources.join(', ')}`);
         }
       } catch (e) {

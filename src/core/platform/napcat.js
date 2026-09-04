@@ -63,6 +63,7 @@ export class NapCatClient {
    * 副作用: 打开 WS 连接；断线时安排自动重连定时器
    */
   connect() {
+    if (this.closed) return; // close() 后残留的重连定时器不得再建连（closed 守卫，header 语义）
     const wsUrl = this.accessToken
       ? `${this.url}?access_token=${encodeURIComponent(this.accessToken)}`
       : this.url;
