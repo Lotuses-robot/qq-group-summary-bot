@@ -1,12 +1,12 @@
 /*
  * 本地明日方舟数据库（ArkDB）：干员表 / 档案 / 肉鸽藏品 / 真实卡池四张表 +
- * 语义模糊匹配 + 抽卡引擎，支撑 commands.js 的干员/藏品/生日/卡池/抽卡指令秒回。
+ * 语义模糊匹配 + 抽卡引擎，支撑指令插件的干员/藏品/生日/卡池/抽卡指令秒回。
  *
  * 对外导出：ArkDB 类（各公开方法见下）；默认只读 data/ark/ 下 refresher.js 下载的四张
  * JSON（character_table / handbook_info_table / roguelike_topic_table /
  * gacha_table），首次访问懒加载进内存，reload() 供数据更新后的热重载。
  * 依赖与实例化点：只 import logger；实例在 chat.js 的 ChatBot 构造内 new 并暴露为
- * chatBot.arkdb——commands.js（命令 ctx 注入）与 webui.js（面板查询/刷新）都在借用
+ * chatBot.arkdb——指令插件（命令 ctx 注入）与 webui.js（面板查询/刷新）都在借用
  * 同一实例，是事实上的进程内共享单例（见 architecture.md §7）。
  * 读写数据：本类只读上述 JSON（缺表/解析失败只记日志不崩）；不写盘——抽卡记录落库
  * 在 analytics.js，数据下载/校验/原子写入在 refresher.js。
@@ -379,7 +379,7 @@ export class ArkDB {
    * 权重抽卡（无卡池时的降级常驻抽卡路径）：星级按明日方舟出率 6★2% / 5★8% /
    * 4★50% / 3★40% 抽取，同星级内等概率随机；排除不可获取（预备干员 isNotObtainable）
    * 与异格限定（isSpChar）。
-   * 副作用: 首次触发 load；结果不落盘——逐抽记录由调用方（commands.js → analytics）负责。
+   * 副作用: 首次触发 load；结果不落盘——逐抽记录由调用方（指令插件 → analytics）负责。
    * @param {number} [n=1] - 抽数（单抽 1、十连 10）
    * @returns {Array<{star: string, name: string, up: boolean}>} 逐抽结果（无 UP 概念，
    *   up 恒为 false）；该星级无候选时 name 为「（未知）」，展示格式交由调用方渲染
@@ -489,7 +489,7 @@ export class ArkDB {
    * 从真实卡池抽卡：星级概率 6★2% / 5★8% / 4★50% / 3★40%（与 randomPull 出率一致），
    * 命中星级后再掷 50%：UP 干员占该星级的一半概率（多名 UP 均分），另一半由该星级
    * 非 UP 干员均分；异格/联动限定（isSpChar）仅在其 UP 卡池中可出。
-   * 副作用: 首次触发 load；结果不落盘——逐抽记录由调用方（commands.js → analytics）负责。
+   * 副作用: 首次触发 load；结果不落盘——逐抽记录由调用方（指令插件 → analytics）负责。
    * @param {Object} pool - 卡池对象；null/undefined 时降级为 randomPull(count)
    * @param {number} [count=10] - 抽数
    * @returns {Array<{star: string, name: string, up: boolean}>} 逐抽结果（up=true 表示

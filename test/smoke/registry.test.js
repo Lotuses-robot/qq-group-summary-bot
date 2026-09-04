@@ -2,7 +2,7 @@
  * P1 冒烟：插件注册表（src/core/registry.js）——refactor-proposal Risk #10「注册顺序 +
  * 稳定排序须确定性」的验证面：名称/描述符校验、按 priority 降序的稳定分发（同分保注册序）、
  * 首响短路（string/true 即停）、null/undefined 落下一个、单插件异常隔离不中断分发。
- * P2 把 commands.js 按领域拆成插件后，本文件是顺序契约的第一道防线。
+ * P2 已把 commands.js 按领域拆成 4 个指令插件（plugins/），本文件是分发顺序契约的第一道防线。
  */
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';

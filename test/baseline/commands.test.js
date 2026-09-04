@@ -1,9 +1,11 @@
 /**
- * P0 行为基线：确定性指令分发表 tryCommand（src/commands.js）。
+ * P0 行为基线：确定性指令分发（P2 起 = src/plugins/ 4 插件经 PluginRegistry 的 dispatch 链）。
  *
  * 锁定目标：14 条规则各自的命中文案、缺省守卫（analytics/groupId/userId 缺失时的
  * 「功能未启用」）、未命中返回严格 null（S12→S13 兜底判定依据）、以及**规则顺序即
  * 优先级**（「抽卡记录/我的抽卡」必须先于「单抽/十连/抽卡」；负向前瞻正则拒绝合并）。
+ * tryCommand 在此是等价壳：真实装配 commandPlugins 进注册表后 dispatch（与 runtime S12
+ * 同一路径），返回语义与旧分发表一致（string 命中 / null 兜底）。
  *
  * ctx 用真实实例组装（合成 ark 数据 + tmp 词典/SQLite），抽卡分支经 withRand 桩随机数。
  */
@@ -11,7 +13,8 @@ import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 
-import { tryCommand } from '../../src/commands.js';
+import { PluginRegistry } from '../../src/core/registry.js';
+import { commandPlugins } from '../../src/plugins/index.js';
 import { LingoStore } from '../../src/core/lingo.js';
 import { ArkDB } from '../../src/core/arkdb.js';
 import { Analytics } from '../../src/core/analytics.js';
@@ -21,6 +24,16 @@ after(silenceLog());
 after(cleanupTmpDirs);
 
 const SIX = '★★★★★★';
+
+/**
+ * 与 runtime S12 等价的分发壳：4 个 command 插件进注册表（priority 带决定次序），
+ * dispatch 首响短路；返回 string = 命中文案、null = 全部落空（旧 tryCommand 同语义）。
+ */
+function tryCommand(ctx, text) {
+  const registry = new PluginRegistry();
+  for (const p of commandPlugins) registry.register(p);
+  return registry.dispatch({ ...ctx, text });
+}
 
 /** 组装命令 ctx：真实 lingo/arkdb/analytics + 群/用户上下文 */
 function makeCtx({ withAnalytics = true } = {}) {

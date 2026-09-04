@@ -93,7 +93,7 @@ export class PluginRegistry {
       try {
         r = p.handleMessage(ctx);
       } catch (e) {
-        // 单插件异常不得中断整条分发给 chat 兜底（与 commands.js tryCommand 外部捕获的现状对齐）
+        // 单插件异常不得中断整条分发给 chat 兜底（保持旧分发表 tryCommand 的容错语义）
         log(`[registry] 插件 ${p.name} 分发异常: ${e.message}`);
         continue;
       }

@@ -1,6 +1,7 @@
 // 本地梗词典模块：维护「词条 → 释义」映射（内存 Map + JSON 落盘，默认 data/lingo.json），供 AI 回答前的本地查词、群内「学习/删除词条」指令与管理面板使用。
 // 导出：LingoStore（class；公开字段 entries，公开方法 lookup/learn/delete/size）。
-// 依赖：Node 内置 fs/path/url、./logger.js（log）；实例化于 src/chat.js 的 ChatBot（new LingoStore(cfg.lingoFile)），经其上下文供 src/commands.js 与 src/webui.js 访问。
+// 依赖：Node 内置 fs/path/url、./logger.js（log）；实例化于 src/chat.js 的 ChatBot（new LingoStore(cfg.lingoFile)），
+// 经其上下文注入指令插件 ctx，并经 getLingo() 供 src/webui.js 访问。
 // 数据：读写 data/lingo.json（词条 → 释义的 JSON 对象）；文件路径来自 ChatBot 配置 cfg.lingoFile。
 
 import fs from 'node:fs';
@@ -21,7 +22,7 @@ export class LingoStore {
    */
   constructor(filePath = DEFAULT_LINGO_FILE) {
     this.filePath = filePath;
-    // 公开字段 entries：词条 → 释义 的 Map。外部直读方：commands.js（词条列表/总数）、webui.js 管理面板（经 entries.entries() 遍历展示与编辑）
+    // 公开字段 entries：词条 → 释义 的 Map。外部直读方：指令插件（词条列表/总数）、webui.js 管理面板（经 entries.entries() 遍历展示与编辑）
     this.entries = new Map();
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     this._load();

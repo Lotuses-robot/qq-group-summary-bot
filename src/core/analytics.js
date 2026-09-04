@@ -122,7 +122,7 @@ export class Analytics {
   }
 
   /**
-   * 「最近 N 天活跃榜」文案（群内指令输出，可直接发；commands.js 调用）。
+   * 「最近 N 天活跃榜」文案（群内指令输出，可直接发；指令插件调用）。
    * 窗口 = now - days×86400 秒；按 user_id 分组计数，排除空名与 '未知'，取前 10。
    * @param {number} [days=7] - 统计窗口天数
    * @returns {string} 榜单文案；窗口内无消息时返回提示语
@@ -151,7 +151,7 @@ export class Analytics {
   }
 
   /**
-   * 「群消息统计」文案（群内指令输出，可直接发；commands.js 调用）。
+   * 「群消息统计」文案（群内指令输出，可直接发；指令插件调用）。
    * 按群消息量降序，附每群总数与最近活跃距今天数。
    * @returns {string} 统计文案；库内无任何记录时返回 '暂无消息统计'
    */
@@ -170,7 +170,7 @@ export class Analytics {
 
   // ---- 抽卡记录 ----
   /**
-   * 追加一条抽卡记录（commands.js 在真实抽卡完成后调用），供「我的抽卡记录」
+   * 追加一条抽卡记录（指令插件在真实抽卡完成后调用），供「我的抽卡记录」
    * 与「欧气榜」查询。
    * @param {string} groupId - 群号
    * @param {string} userId - QQ 号
@@ -191,7 +191,7 @@ export class Analytics {
   }
 
   /**
-   * 某人在某群的抽卡汇总与最近记录（commands.js「我的抽卡记录」指令调用）。
+   * 某人在某群的抽卡汇总与最近记录（指令插件「我的抽卡记录」指令调用）。
    * 星级判定按文案包含的 ★ 个数：六星 = star 含 '★★★★★★'；五星 = 含 5 个★但
    * 不含 6 个★（★ 都落在连续串里，两种 LIKE 足以区分）。
    * @param {string} groupId - 群号
@@ -216,7 +216,7 @@ export class Analytics {
   }
 
   /**
-   * 群内「欧气榜」行数据（commands.js 取到后拼榜单一并发群）。
+   * 群内「欧气榜」行数据（指令插件取到后拼榜单一并发群）。
    * 排序：六星数降序 → 总抽数降序，取前 10。
    * @param {string} groupId - 群号
    * @returns {Object[]} 行数组 [{name, user_id, total, six}]；该群无抽卡记录时为空数组

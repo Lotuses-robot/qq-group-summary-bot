@@ -27,8 +27,9 @@ import { filterMessages as filterMessagesRaw } from './filter.js';
 import { Analytics } from './analytics.js';
 import { DataRefresher } from './refresher.js';
 import { ChatBot } from '../chat.js';
-import { tryCommand } from '../commands.js';
 import { WebUI } from '../webui.js';
+import { commandPlugins } from '../plugins/index.js';
+import { PluginRegistry } from './registry.js';
 import { log, err } from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -60,6 +61,13 @@ export function createApp(config, overrides = {}) {
   const scheduler = overrides.scheduler || new Scheduler(config.schedule || {});
   const analytics = overrides.analytics || new Analytics(path.join(dataDir, 'messages.db'), path.join(dataDir, 'messages'));
   const refresher = overrides.refresher || new DataRefresher(path.join(dataDir, 'ark'), config.dataRefresh || {});
+
+  // 插件注册表（P2）：登记 commandPlugins（4 个确定性指令插件）；实际分发次序由各插件
+  // priority 决定（lingo 700 > ark 600 > gacha 500 > stats 400，域内规则顺序即优先级，
+  // 见 plugins/*.js 头注释——旧 commands.js 14 条线性规则的等价编排）。S12 段经
+  // registry.dispatch 走插件，服务句柄随每次消息 ctx 注入；P3 起更多插件并入本表。
+  const registry = new PluginRegistry();
+  for (const p of commandPlugins) registry.register(p);
 
   /**
    * 数据自动/手动刷新编排（architecture §6.3）：三个触发源共用同一函数——启动定时器 / 群指令 S11 / WebUI POST /api/refresh。
@@ -490,20 +498,24 @@ export function createApp(config, overrides = {}) {
       return;
     }
 
-    // S12 确定性指令分发表（commands.js，14 条规则）：返回严格 null 才算未命中 → 落到 S13 LLM 兜底
-    // 确定性指令路由（词典学习/干员查询/藏品查询/统计/抽卡等，带群与用户上下文）
+    // S12 确定性指令分发（registry + commandPlugins：词典学习/干员查询/藏品查询/统计/
+    // 抽卡等，带群与用户上下文）：dispatch 返回严格 null 才算未命中 → 落到 S13 LLM 兜底；
+    // 返回 true 表示插件已自行处理（当前 4 个指令插件都回文案，无 true 分支，仅防 P3 插件引入）
     const senderName = event.sender?.card || event.sender?.nickname || '群友';
-    const cmdReply = tryCommand({
+    const cmdReply = registry.dispatch({
       lingo: chatBot.lingo,
       arkdb: chatBot.arkdb,
       analytics,
       groupId: event.group_id,
       userId: event.user_id,
       userName: senderName,
-    }, question);
+      text: question,
+    });
     if (cmdReply !== null) {
       log(`[group ${event.group_id}] 指令响应: ${question.slice(0, 30)}`);
-      client.sendGroupMsg(event.group_id, cmdReply).catch((e) => err(`[group ${event.group_id}] 指令发送失败:`, e.message));
+      if (typeof cmdReply === 'string') {
+        client.sendGroupMsg(event.group_id, cmdReply).catch((e) => err(`[group ${event.group_id}] 指令发送失败:`, e.message));
+      }
       return;
     }
 

@@ -19,7 +19,6 @@ const EXPECTED_EXPORTS = {
   'core/arkdb.js': ['ArkDB'],
   'core/cache.js': ['KnowledgeCache'],
   'chat.js': ['ChatBot'],
-  'commands.js': ['tryCommand'],
   'core/filter.js': ['isSensitive', 'sanitizeText', 'filterMessages'],
   'core/lingo.js': ['LingoStore'],
   'core/logger.js': ['log', 'err'],
@@ -34,6 +33,11 @@ const EXPECTED_EXPORTS = {
   'webui.js': ['WebUI'],
   'core/wiki.js': ['WikiRetriever', 'extractKeywords', 'isArknightsRelated'],
   'core/wikipedia.js': ['WikipediaRetriever'],
+  'plugins/ark.js': ['createArkPlugin'],
+  'plugins/gacha.js': ['createGachaPlugin'],
+  'plugins/index.js': ['commandPlugins'],
+  'plugins/lingo.js': ['createLingoPlugin'],
+  'plugins/stats.js': ['createStatsPlugin'],
 };
 
 describe('模块导入冒烟', () => {

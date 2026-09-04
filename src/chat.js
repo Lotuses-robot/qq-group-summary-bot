@@ -4,7 +4,7 @@
  *（PRTS.Wiki 仅方舟相关问题 / 萌娘百科无条件 / 维基百科仅非方舟且 enabled），按「来源可信度+热度」评分排序
  * ③ 子服务宿主：构造内 new 全部 7 个依赖——WikiRetriever / MoegirlRetriever / WikipediaRetriever /
  * LingoStore / KnowledgeCache / ArkDB / Semaphore；其中 lingo 与 arkdb 是事实共享单例
- *（index.js 经 chatBot.lingo / chatBot.arkdb 注入 commands.js，WebUI 经 getLingo() 借用）。
+ *（runtime.js 经 registry dispatch 的 ctx 注入指令插件（plugins/），WebUI 经 getLingo() 借用）。
  *
  * 内存状态（只存内存、不落盘、重启即清）：groupHistory（群 → 对话历史数组）、
  * groupSpeakers（群 → 昵称/QQ → 「群友N」匿名代号映射；每群上限 200、先到先得满了逐出最早，
@@ -64,7 +64,7 @@ function scoreResult(source, { size = 0, wordcount = 0, title = '' } = {}) {
 
 /**
  * 群聊 AI 应答器：chat() 为外部唯一入口（本地快路秒回 → 联网检索 → LLM 兜底，14 步主流程见 chat 内注释）。
- * 对外只被 index.js 的路由 S13 调用；commands.js/WebUI 反向借用本实例的 lingo/arkdb 字段。
+ * 对外只被 runtime.js 的路由 S13 调用；指令插件（plugins/）与 WebUI 经 ctx/getLingo() 借用本实例的 lingo/arkdb 字段。
  *
  * @param {Object} [cfg={}] - 配置子集（config.llm 传入；含部分 chat 专属键）
  * @param {string} [cfg.apiKey] - LLM API Key，缺省回退 LLM_API_KEY 环境变量
