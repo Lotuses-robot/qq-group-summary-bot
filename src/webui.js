@@ -102,7 +102,7 @@ export class WebUI {
       return;
     }
 
-    // 状态快照（getStatus 内会先 chatBot.arkdb.load() 保证计数新鲜）
+    // 状态快照（getStatus 内会先 arkdb.load() 保证计数新鲜）
     if (p === '/api/status') {
       return this._json(res, this.ctx.getStatus());
     }

@@ -2,9 +2,10 @@
  * 运行时装配与编排（core 主运行库入口；P1 由 src/index.js 拆出）。
  *
  * 职责：唯一装配者 + 消息路由链 + 三个后台编排流程（原 index.js 全文迁移，行为一字不改）：
- * 平台/服务实例（MessageStore/NapCatClient/Summarizer/ChatBot/Scheduler/Analytics/DataRefresher
- * 及按 webui.enabled 条件装配的 WebUI）都在 createApp 内 new；路由链 S1–S13 与
- * refreshData/backfillHistory/dailyReport 同址迁移。
+ * 平台/服务实例（MessageStore/NapCatClient/Summarizer/Scheduler/Analytics/DataRefresher +
+ * lingo/arkdb/cache/wiki/moegirl/wikipedia 知识服务共享单例）都在 createApp 内装配，注入
+ * ChatBrain（plugins/chat，P3 构造注入）；路由链 S1–S13 与 refreshData/backfillHistory/
+ * dailyReport 同址迁移。WebUI 按 webui.enabled 条件装配（P3 收尾后并入插件）。
  *
  * 拆分动机（docs/refactor-proposal.md）：index.js 原是「加载即启动」——import 即读
  * config、建连接、起定时器，无法被测试/工具 import。现 createApp(config, overrides)
@@ -26,7 +27,13 @@ import { Scheduler } from './scheduler.js';
 import { filterMessages as filterMessagesRaw } from './filter.js';
 import { Analytics } from './analytics.js';
 import { DataRefresher } from './refresher.js';
-import { ChatBot } from '../chat.js';
+import { LingoStore } from './lingo.js';
+import { ArkDB } from './arkdb.js';
+import { KnowledgeCache } from './cache.js';
+import { WikiRetriever } from './wiki.js';
+import { MoegirlRetriever } from './moegirl.js';
+import { WikipediaRetriever } from './wikipedia.js';
+import { ChatBrain } from '../plugins/chat.js';
 import { WebUI } from '../webui.js';
 import { commandPlugins } from '../plugins/index.js';
 import { PluginRegistry } from './registry.js';
@@ -42,8 +49,9 @@ const root = path.resolve(__dirname, '..', '..');
  * start() 负责全部启动副作用。config 键名/schema 与原 index.js 完全一致。
  *
  * @param {Object} config - 完整配置（见 config.example.json；llm.apiKey 已由 main 回填）
- * @param {Object} [overrides={}] - 测试注入点：store/client/summarizer/chatBot/scheduler/
- *   analytics/refresher 任一给值即代替内部 new（缺省各按 config 实建）
+ * @param {Object} [overrides={}] - 测试注入点：store/client/summarizer/scheduler/analytics/
+ *   refresher/brain（或 lingo/arkdb/cache/wiki/moegirl/wikipedia 任一单例）给值即代替内部
+ *   new（缺省各按 config 实建）
  * @returns {{config: Object, services: Object, refreshData: Function, start: Function,
  *   stop: Function, getStatus: Function}} 装配结果
  */
@@ -57,10 +65,20 @@ export function createApp(config, overrides = {}) {
     accessToken: config.napcat.accessToken || '',
   });
   const summarizer = overrides.summarizer || new Summarizer(llm);
-  const chatBot = overrides.chatBot || new ChatBot(llm);
   const scheduler = overrides.scheduler || new Scheduler(config.schedule || {});
   const analytics = overrides.analytics || new Analytics(path.join(dataDir, 'messages.db'), path.join(dataDir, 'messages'));
   const refresher = overrides.refresher || new DataRefresher(path.join(dataDir, 'ark'), config.dataRefresh || {});
+
+  // 检索与知识服务上移为共享单例（P3，refactor-proposal「服务上移」）：原 ChatBot 构造内 new 的
+  // lingo/arkdb/cache 与三检索器改在此装配——注入 ChatBrain（字段引用同旧，chat() 正文零改动），
+  // 同时供指令插件 ctx（S12）与 getStatus/refreshData/WebUI 借用同一实例（事实共享单例语义不变）
+  const lingo = overrides.lingo || new LingoStore(llm.lingoFile);
+  const arkdb = overrides.arkdb || new ArkDB(llm.arkdbDir);
+  const cache = overrides.cache || new KnowledgeCache(llm.cacheFile, { ttlHours: llm.cacheTtlHours ?? 168 });
+  const wiki = overrides.wiki || new WikiRetriever(llm);
+  const moegirl = overrides.moegirl || new MoegirlRetriever(llm);
+  const wikipedia = overrides.wikipedia || new WikipediaRetriever(llm);
+  const brain = overrides.brain || new ChatBrain({ cfg: llm, lingo, arkdb, cache, wiki, moegirl, wikipedia });
 
   // 插件注册表（P2）：登记 commandPlugins（4 个确定性指令插件）；实际分发次序由各插件
   // priority 决定（lingo 700 > ark 600 > gacha 500 > stats 400，域内规则顺序即优先级，
@@ -85,20 +103,20 @@ export function createApp(config, overrides = {}) {
     log('[refresh] 开始更新本地数据...');
 
     // 快照旧数据（用于新增播报对比；走公开快照 API，不再直读 characters/_isOperator/gachaPools）
-    const oldHighOps = new Map(chatBot.arkdb.snapshotHighOps().map((o) => [o.id, o.name]));
-    const oldPoolIds = new Set(chatBot.arkdb.snapshotGachaPools().map((p) => p.gachaPoolId));
+    const oldHighOps = new Map(arkdb.snapshotHighOps().map((o) => [o.id, o.name]));
+    const oldPoolIds = new Set(arkdb.snapshotGachaPools().map((p) => p.gachaPoolId));
 
     const { updated, unchanged, failed } = await refresher.refresh();
 
     let announce = '';
     if (updated.length > 0) {
-      chatBot.arkdb.reload();
+      arkdb.reload();
       log('[refresh] 内存数据已重新加载');
 
       // 对比新增内容
       const new6 = [];
       const new5 = [];
-      for (const c of chatBot.arkdb.snapshotHighOps()) {
+      for (const c of arkdb.snapshotHighOps()) {
         if (!oldHighOps.has(c.id)) {
           if (c.rarity === 'TIER_6') new6.push(c.name);
           else if (c.rarity === 'TIER_5') new5.push(c.name);
@@ -106,7 +124,7 @@ export function createApp(config, overrides = {}) {
       }
       const now = Math.floor(Date.now() / 1000);
       const newPools = [];
-      for (const p of chatBot.arkdb.snapshotGachaPools()) {
+      for (const p of arkdb.snapshotGachaPools()) {
         if (!oldPoolIds.has(p.gachaPoolId) && (!p.openTime || p.openTime <= now) && (!p.endTime || p.endTime >= now)) {
           newPools.push(p.gachaPoolName);
         }
@@ -503,8 +521,8 @@ export function createApp(config, overrides = {}) {
     // 返回 true 表示插件已自行处理（当前 4 个指令插件都回文案，无 true 分支，仅防 P3 插件引入）
     const senderName = event.sender?.card || event.sender?.nickname || '群友';
     const cmdReply = registry.dispatch({
-      lingo: chatBot.lingo,
-      arkdb: chatBot.arkdb,
+      lingo: lingo,
+      arkdb: arkdb,
       analytics,
       groupId: event.group_id,
       userId: event.user_id,
@@ -520,7 +538,7 @@ export function createApp(config, overrides = {}) {
     }
 
     // S13 AI 兜底：不 await；reply 非空才发送（chat 内部失败已回退 defaultReply 文案照发，仅发送失败走 catch）
-    chatBot.chat(event.group_id, senderName, question, event.user_id)
+    brain.chat(event.group_id, senderName, question, event.user_id)
       .then((reply) => {
         if (reply) return client.sendGroupMsg(event.group_id, reply);
       })
@@ -529,14 +547,14 @@ export function createApp(config, overrides = {}) {
 
   /** WebUI/状态页共享的状态快照（characters/relics/pools 计数前先确保 arkdb 已 load） */
   function getStatus() {
-    chatBot.arkdb.load();
+    arkdb.load();
     return {
       wsConnected,
       selfId,
-      operators: chatBot.arkdb.characters.size,
-      relics: chatBot.arkdb.relics.size,
-      pools: chatBot.arkdb.gachaPools.length,
-      lingoCount: chatBot.lingo.size(),
+      operators: arkdb.characters.size,
+      relics: arkdb.relics.size,
+      pools: arkdb.gachaPools.length,
+      lingoCount: lingo.size(),
       messages: analytics.countMessages(),
       uptime: `${Math.floor((Date.now() - startedAt) / 60000)} 分钟`,
     };
@@ -581,7 +599,7 @@ export function createApp(config, overrides = {}) {
       const webui = new WebUI(config.webui || {});
       webui.start({
         getStatus,
-        getLingo: () => chatBot.lingo,
+        getLingo: () => lingo,
         getConfig: () => config,
         refreshData,
       });
@@ -598,7 +616,7 @@ export function createApp(config, overrides = {}) {
 
   return {
     config,
-    services: { dataDir, llm, store, client, summarizer, chatBot, scheduler, analytics, refresher },
+    services: { dataDir, llm, store, client, summarizer, brain, lingo, arkdb, cache, wiki, moegirl, wikipedia, scheduler, analytics, refresher, registry },
     refreshData,
     getStatus,
     start,

@@ -1,22 +1,22 @@
 /*
- * ChatBot 三职合一：① LLM 群聊聊天器（每群上下文记忆 chatHistoryLimit + 全局并发信号量限流）
- * ② 三级知识库检索编排：本地梗词典（可信度最高、置顶）→ 知识缓存（同题二次命中，TTL 168h）→ 联网检索
- *（PRTS.Wiki 仅方舟相关问题 / 萌娘百科无条件 / 维基百科仅非方舟且 enabled），按「来源可信度+热度」评分排序
- * ③ 子服务宿主：构造内 new 全部 7 个依赖——WikiRetriever / MoegirlRetriever / WikipediaRetriever /
- * LingoStore / KnowledgeCache / ArkDB / Semaphore；其中 lingo 与 arkdb 是事实共享单例
- *（runtime.js 经 registry dispatch 的 ctx 注入指令插件（plugins/），WebUI 经 getLingo() 借用）。
+ * 群聊 AI 应答插件（P3 由 src/chat.js 的 ChatBot 改造而来）：类本体更名 ChatBrain，
+ * 「构造注入」替代「构造内 new」——检索器与知识服务（lingo/arkdb/cache/wiki/moegirl/
+ * wikipedia）由 runtime 装配为 core 共享单例后注入，chat() 的 14 步主流程、_reply、
+ * buildMessages、匿名机制等**逐字迁移未重排**（重构红线：见 refactor-proposal §行为保真清单）。
  *
- * 内存状态（只存内存、不落盘、重启即清）：groupHistory（群 → 对话历史数组）、
- * groupSpeakers（群 → 昵称/QQ → 「群友N」匿名代号映射；每群上限 200、先到先得满了逐出最早，
- * 匿名机制见 docs/external-apis.md §5）。
+ * 职责三合一（与原 ChatBot 相同）：① LLM 群聊聊天器（每群上下文记忆 chatHistoryLimit +
+ * 全局并发信号量限流）② 三级知识库检索编排：本地梗词典（可信度最高、置顶）→ 知识缓存
+ *（同题二次命中，TTL 168h）→ 联网检索（PRTS.Wiki 仅方舟相关问题 / 萌娘百科无条件 /
+ * 维基百科仅非方舟且 enabled），按「来源可信度+热度」评分排序 ③ 群会话内存态宿主：
+ * groupHistory/groupSpeakers 留在 brain 实例（每群上限 200、匿名机制见 docs/external-apis.md §5）。
+ *
+ * 注意：brain.lingo/.arkdb 与 runtime 共享单例是同一对象——指令插件（plugins/）与 WebUI
+ * 经 ctx/getLingo() 借用的也是同一实例。
+ * 依赖：logger、core/wiki.js 纯函数；实例化点：core/runtime.js 装配（deps 注入）。
+ * 读写数据：读 lingo/arkdb/cache（注入实例）；调 LLM（fetch）；仅内存写 groupHistory/groupSpeakers。
  */
-import { log } from './core/logger.js';
-import { WikiRetriever, isArknightsRelated, extractKeywords } from './core/wiki.js';
-import { MoegirlRetriever } from './core/moegirl.js';
-import { WikipediaRetriever } from './core/wikipedia.js';
-import { LingoStore } from './core/lingo.js';
-import { KnowledgeCache } from './core/cache.js';
-import { ArkDB } from './core/arkdb.js';
+import { log } from '../core/logger.js';
+import { isArknightsRelated, extractKeywords } from '../core/wiki.js';
 
 // 来源可信度权重（分数越高越可信）
 const SOURCE_TRUST = {
@@ -64,23 +64,27 @@ function scoreResult(source, { size = 0, wordcount = 0, title = '' } = {}) {
 
 /**
  * 群聊 AI 应答器：chat() 为外部唯一入口（本地快路秒回 → 联网检索 → LLM 兜底，14 步主流程见 chat 内注释）。
- * 对外只被 runtime.js 的路由 S13 调用；指令插件（plugins/）与 WebUI 经 ctx/getLingo() 借用本实例的 lingo/arkdb 字段。
+ * 对外只被 runtime.js 的路由 S13（经 registry chat 插件）调用；构造注入全部服务（服务上移，P3）。
  *
- * @param {Object} [cfg={}] - 配置子集（config.llm 传入；含部分 chat 专属键）
- * @param {string} [cfg.apiKey] - LLM API Key，缺省回退 LLM_API_KEY 环境变量
- * @param {string} [cfg.baseUrl='https://api.openai.com/v1'] - OpenAI 兼容端点（末尾斜杠会被剥掉）
- * @param {string} [cfg.model='gpt-3.5-turbo'] - LLM 模型名
- * @param {number} [cfg.maxTokens=1024] - 回复上限（与 Summarizer 的默认 2048 不同，属既有差异）
- * @param {number} [cfg.chatHistoryLimit=12] - 每群对话历史保留条数
- * @param {boolean} [cfg.chatEnabled=true] - false 时 chat() 直接返回 null（不消耗 LLM）
- * @param {string} [cfg.defaultReply] - LLM 调用失败时的兜底文案（照发）
- * @param {string} [cfg.lingoFile] - 词典 JSON 文件路径（LingoStore）
- * @param {string} [cfg.cacheFile] - 知识缓存 JSON 文件路径（KnowledgeCache）
- * @param {string} [cfg.arkdbDir] - 本地明日方舟数据目录（ArkDB）
- * @param {number} [cfg.chatConcurrency=3] - LLM 并发信号量上限
+ * @param {Object} [deps={}] - 装配注入（runtime createApp 构造）
+ * @param {Object} [deps.cfg={}] - 配置子集（config.llm 传入；含部分 chat 专属键）
+ * @param {string} [deps.cfg.apiKey] - LLM API Key，缺省回退 LLM_API_KEY 环境变量
+ * @param {string} [deps.cfg.baseUrl='https://api.openai.com/v1'] - OpenAI 兼容端点（末尾斜杠会被剥掉）
+ * @param {string} [deps.cfg.model='gpt-3.5-turbo'] - LLM 模型名
+ * @param {number} [deps.cfg.maxTokens=1024] - 回复上限（与 Summarizer 的默认 2048 不同，属既有差异）
+ * @param {number} [deps.cfg.chatHistoryLimit=12] - 每群对话历史保留条数
+ * @param {boolean} [deps.cfg.chatEnabled=true] - false 时 chat() 直接返回 null（不消耗 LLM）
+ * @param {string} [deps.cfg.defaultReply] - LLM 调用失败时的兜底文案（照发）
+ * @param {number} [deps.cfg.chatConcurrency=3] - LLM 并发信号量上限
+ * @param {Object} deps.lingo - LingoStore 共享单例（词典；config.llm.lingoFile 已在装配层解析）
+ * @param {Object} deps.arkdb - ArkDB 共享单例（本地方舟数据；config.llm.arkdbDir 已在装配层解析）
+ * @param {Object} deps.cache - KnowledgeCache 共享单例（知识缓存；config.llm.cacheFile 已在装配层解析）
+ * @param {Object} deps.wiki - WikiRetriever 实例（PRTS.Wiki，仅方舟相关问题检索）
+ * @param {Object} deps.moegirl - MoegirlRetriever 实例（萌娘百科）
+ * @param {Object} deps.wikipedia - WikipediaRetriever 实例（维基百科）
  */
-export class ChatBot {
-  constructor(cfg = {}) {
+export class ChatBrain {
+  constructor({ cfg = {}, lingo, arkdb, cache, wiki, moegirl, wikipedia } = {}) {
     this.apiKey = cfg.apiKey || process.env.LLM_API_KEY || '';
     this.baseUrl = (cfg.baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
     this.model = cfg.model || 'gpt-3.5-turbo';
@@ -88,13 +92,13 @@ export class ChatBot {
     this.historyLimit = cfg.chatHistoryLimit ?? 12;
     this.enabled = cfg.chatEnabled !== false;
     this.defaultReply = cfg.defaultReply ?? '抱歉，我现在不方便回复，稍后再试试吧~';
-    // 7 个子服务在此一次性 new（子服务宿主职责）：三个检索器共享 cfg 的检索配置键
-    this.wiki = new WikiRetriever(cfg);
-    this.moegirl = new MoegirlRetriever(cfg);
-    this.wikipedia = new WikipediaRetriever(cfg);
-    this.lingo = new LingoStore(cfg.lingoFile);
-    this.cache = new KnowledgeCache(cfg.cacheFile, { ttlHours: cfg.cacheTtlHours ?? 168 });
-    this.arkdb = new ArkDB(cfg.arkdbDir);
+    // 7 个依赖自装配层注入（构造注入；字段名与原 ChatBot 内 new 出的实例一致，chat() 正文零改动）
+    this.wiki = wiki;
+    this.moegirl = moegirl;
+    this.wikipedia = wikipedia;
+    this.lingo = lingo;
+    this.cache = cache;
+    this.arkdb = arkdb;
 
     // 全局并发信号量：同时最多 3 个 LLM 请求，避免 API 限流
     this.semaphore = new Semaphore(cfg.chatConcurrency ?? 3);
@@ -140,7 +144,7 @@ export class ChatBot {
     if (/意思|什么梗|啥意思|咋回事|由来|来历|出处|梗|黑话|简称/.test(t)) return true;
     // 中文/数字名 + 提问词，如 "普瑞塞斯是谁" "325是什么" "高卢银行支票是什么" "JT8-3是啥"
     if (/(是谁|是啥|是什么|是啥子|是谁呀|什么人物|什么人|是哪位|是干什么的|是干嘛的|是啥意思|啥意思|怎么来的|什么梗|是啥玩意)/.test(t)) return true;
-    // 纯数字/短词提问，如 "325是什么" "JT8-3" 
+    // 纯数字/短词提问，如 "325是什么" "JT8-3"
     if (/^(什么|是啥|是)[^\s]{1,10}$/.test(t)) return true;
     if (/^[0-9A-Za-z\-]{1,10}(是什么|是啥|什么意思|是啥意思)/.test(t)) return true;
     return false;
