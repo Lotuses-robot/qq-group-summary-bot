@@ -20,6 +20,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // knowledge/（P5a 归类）比原 src/ 深两层：项目根 = __dirname/../../..（config 缺省时才用此默认）
 const DEFAULT_DATA_DIR = path.resolve(__dirname, '..', '..', '..', 'data', 'ark');
 
+// 星级键 → 展示文本（randomPull / pullFromPool 共用；游戏数据 rarity 字段即 TIER_x 键）
+const RARITY_STARS = { TIER_6: '★★★★★★', TIER_5: '★★★★★', TIER_4: '★★★★', TIER_3: '★★★' };
+
 /**
  * 明日方舟本地数据库：四表懒加载（load，幂等）+ 名称/藏品查询与语义模糊匹配 +
  * 权重抽卡与真实卡池抽卡（出率语义见 randomPull / pullFromPool 的注释）。
@@ -390,15 +393,14 @@ export class ArkDB {
   randomPull(n = 1) {
     this.load();
     const weights = { TIER_6: 0.02, TIER_5: 0.08, TIER_4: 0.5, TIER_3: 0.4 };
-    const stars = { TIER_6: '★★★★★★', TIER_5: '★★★★★', TIER_4: '★★★★', TIER_3: '★★★' };
     const pool = [...this.characters.values()].filter((c) => c.name && weights[c.rarity] && this.isOperator(c) && !c.spChar);
     const pickOne = () => {
       let r = Math.random();
       for (const [tier, w] of Object.entries(weights)) {
-        if (r < w) return { tier, star: stars[tier] };
+        if (r < w) return { tier, star: RARITY_STARS[tier] };
         r -= w;
       }
-      return { tier: 'TIER_3', star: stars.TIER_3 };
+      return { tier: 'TIER_3', star: RARITY_STARS.TIER_3 };
     };
     const results = [];
     for (let i = 0; i < n; i++) {
@@ -504,7 +506,6 @@ export class ArkDB {
     const { up6, up5 } = this.poolRateUps(pool);
     const upSet6 = new Set(up6);
     const upSet5 = new Set(up5);
-    const stars = { TIER_6: '★★★★★★', TIER_5: '★★★★★', TIER_4: '★★★★', TIER_3: '★★★' };
     const byTier = { TIER_6: [], TIER_5: [], TIER_4: [], TIER_3: [] };
     for (const c of this.characters.values()) {
       if (!c.name || !byTier[c.rarity] || !this.isOperator(c)) continue;
@@ -531,7 +532,7 @@ export class ArkDB {
       }
       if (!candidates.length) candidates = byTier[tier] || [];
       const c = candidates[Math.floor(Math.random() * candidates.length)];
-      return { star: stars[tier], name: c?.name || '未知', up: c ? upSet.has(c.id) : false };
+      return { star: RARITY_STARS[tier], name: c?.name || '未知', up: c ? upSet.has(c.id) : false };
     };
     const results = [];
     for (let i = 0; i < count; i++) {

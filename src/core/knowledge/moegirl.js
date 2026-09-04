@@ -127,9 +127,9 @@ export class MoegirlRetriever {
     // 优先匹配正文容器（MediaWiki 常见结构）
     const patterns = [
       /<div class="mw-parser-output">([\s\S]*?)<\/div>\s*<\/div>/,
-      /<div id="mw-content-text"[^>]*>([\s\S]*?)<div class="printfooter"|/,
+      /<div id="mw-content-text"[^>]*>([\s\S]*?)<div class="printfooter"/,
       /<div class="mw-body-content"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/,
-      /<div id="bodyContent"[^>]*>([\s\S]*?)<div class="printfooter"|/,
+      /<div id="bodyContent"[^>]*>([\s\S]*?)<div class="printfooter"/,
     ];
     for (const p of patterns) {
       const m = body.match(p);

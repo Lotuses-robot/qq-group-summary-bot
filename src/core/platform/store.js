@@ -289,14 +289,7 @@ export class MessageStore {
       text,
     };
     if (this.writtenIds.has(`${event.group_id}:${rec.id}`)) return null;
-    g.messages.set(rec.id, rec);
-    this.writtenIds.add(`${event.group_id}:${rec.id}`);
-    this._learnUser(g, rec);
-    this.setLastSeenTs(rec.time);
-    const file = this._fileFor(event.group_id, localDate(rec.time * 1000));
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.appendFileSync(file, JSON.stringify(rec) + '\n');
-    return rec;
+    return this._commit(event.group_id, g, rec, { touchLastSeen: true });
   }
 
   /**
@@ -328,9 +321,18 @@ export class MessageStore {
       text,
     };
     if (this.writtenIds.has(`${groupId}:${rec.id}`)) return null;
+    return this._commit(groupId, g, rec);
+  }
+
+  // 内部：两条落库路径共用的尾部（addMessage 实时事件 / addHistoryMessage 历史补偿）——
+  // 写前查重 → 登记内存态 → 学名片 → JSONL 追加；touchLastSeen=true 时推进 lastSeenTs
+  // （addMessage 用；历史补偿不移在线水位，见 addHistoryMessage 的 JSDoc）
+  _commit(groupId, g, rec, { touchLastSeen = false } = {}) {
+    if (this.writtenIds.has(`${groupId}:${rec.id}`)) return null;
     g.messages.set(rec.id, rec);
     this.writtenIds.add(`${groupId}:${rec.id}`);
     this._learnUser(g, rec);
+    if (touchLastSeen) this.setLastSeenTs(rec.time);
     const file = this._fileFor(groupId, localDate(rec.time * 1000));
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.appendFileSync(file, JSON.stringify(rec) + '\n');

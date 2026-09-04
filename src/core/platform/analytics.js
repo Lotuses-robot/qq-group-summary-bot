@@ -17,6 +17,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { log } from './logger.js';
 
+// messages 表镜像 INSERT（_ensureImported 整库导入与 record 实时镜像共用同一语句）
+const INSERT_MSG_SQL = 'INSERT OR IGNORE INTO messages (group_id, msg_id, time, user_id, name, text) VALUES (?,?,?,?,?,?)';
+
 /**
  * 消息分析层（基于 SQLite）：从 JSONL 一次性导入，之后每条新消息实时记录；
  * 用于活跃榜、群统计等聚合查询（JSONL 不适合此类查询）。
@@ -79,9 +82,7 @@ export class Analytics {
     try {
       const dirs = fs.existsSync(this.messagesDir) ? fs.readdirSync(this.messagesDir) : [];
       let total = 0;
-      const stmt = this.db.prepare(
-        'INSERT OR IGNORE INTO messages (group_id, msg_id, time, user_id, name, text) VALUES (?,?,?,?,?,?)'
-      );
+      const stmt = this.db.prepare(INSERT_MSG_SQL);
       for (const gid of dirs) {
         const gdir = path.join(this.messagesDir, gid);
         if (!fs.statSync(gdir).isDirectory()) continue;
@@ -115,9 +116,7 @@ export class Analytics {
   record(groupId, rec) {
     this._ensureImported();
     try {
-      this.db.prepare(
-        'INSERT OR IGNORE INTO messages (group_id, msg_id, time, user_id, name, text) VALUES (?,?,?,?,?,?)'
-      ).run(String(groupId), String(rec.id), rec.time ?? 0, String(rec.userId ?? ''), rec.name ?? '', rec.text ?? '');
+      this.db.prepare(INSERT_MSG_SQL).run(String(groupId), String(rec.id), rec.time ?? 0, String(rec.userId ?? ''), rec.name ?? '', rec.text ?? '');
     } catch { /* 忽略写入失败 */ }
   }
 
