@@ -34,11 +34,11 @@ import { KnowledgeCache } from './cache.js';
 import { WikiRetriever } from './wiki.js';
 import { MoegirlRetriever } from './moegirl.js';
 import { WikipediaRetriever } from './wikipedia.js';
-import { ChatBrain } from '../plugins/chat.js';
+import { ChatBrain, createChatPlugin } from '../plugins/chat.js';
 import { createSummaryPlugin } from '../plugins/summary.js';
 import { createRefreshPlugin } from '../plugins/refresh.js';
 import { createReportPlugin } from '../plugins/report.js';
-import { WebUI } from '../webui.js';
+import { createWebUiPlugin } from '../plugins/webui.js';
 import { commandPlugins } from '../plugins/index.js';
 import { PluginRegistry } from './registry.js';
 import { log, err } from './logger.js';
@@ -117,10 +117,10 @@ export function createApp(config, overrides = {}) {
   let ready = false;
   let backfillDone = false;
 
-  // 插件注册（P3 唯一装配点）：P2 四指令（commandPlugins 静态交付）+ P3b 后台/服务插件
+  // 插件注册（P3 唯一装配点）：P2 四指令（commandPlugins 静态交付）+ 后台/服务插件
   // （依赖本闭包内的服务实例、配置派生量与就绪标志 → 在 createApp 内就地构造，不随静态数组）。
-  // 分发次序由 priority 带决定：summary 900 = 原 S8 手动总结、refresh 800 = 原 S11 手动刷新、
-  // 指令 700–400、report 仅 hooks（priority 0 无消息面）。P3c：chat/webui 并入本表。
+  // 分发次序由 priority 带决定：summary 900 = 原 S8、refresh 800 = 原 S11、指令 700–400、
+  // chat 300 = 原 S13 LLM 兜底（分发带末端恒消费）；report/webui 仅 hooks（priority 0 无消息面）。
   const registry = new PluginRegistry();
   const summaryPlugin = createSummaryPlugin({
     store, summarizer, client, filterMessages,
@@ -139,7 +139,12 @@ export function createApp(config, overrides = {}) {
     reportUserId, reportMinMessages,
     isReady: () => ready,
   });
-  for (const p of [...commandPlugins, summaryPlugin, refreshPlugin, reportPlugin]) registry.register(p);
+  const chatPlugin = createChatPlugin({ brain, client });
+  const webuiPlugin = createWebUiPlugin({
+    cfg: config.webui || {},
+    startCtx: { getStatus, getLingo: () => lingo, getConfig: () => config, refreshData },
+  });
+  for (const p of [commandPlugins, summaryPlugin, refreshPlugin, reportPlugin, chatPlugin, webuiPlugin].flat()) registry.register(p);
 
   /**
    * 数据更新编排公共入口（桥接层；P3b 起正文归 refresh 插件的 api.refresh——自动定时器/S11/WebUI
@@ -318,9 +323,11 @@ export function createApp(config, overrides = {}) {
 
     // S11 数据刷新指令：P3b 已迁 refresh 插件（priority 800，整串锚定正则 + ack + 异步执行，
     // 见 plugins/refresh.js）——路由不再单独判定，同 S8 一并由分发带认领。
-    // S12 确定性分发（registry 全量插件：summary 900/refresh 800 原 S8/S11 带 + 指令插件 700–400，
-    // 带群与用户上下文）：dispatch 返回 string 才发送；true = 插件自驱已处理（总结/刷新异步
-    // 进行、调用方不 await）；null = 无人认领 → 落 S13 LLM 兜底
+    // S12+S13 确定性指令与 LLM 兜底统一经 registry 分发（summary 900/refresh 800 原 S8/S11 带 +
+    // 指令 700–400 + chat 300 兜底带，带群与用户上下文）：dispatch 返回 string → 本层发送；
+    // true = 插件自驱已处理（总结/刷新/chat 异步进行、不 await）。chat 插件恒返回 true 消费消息，
+    // 故分发不再有落空路径——原「严格 null 才落 chat」边界内化为分发带末端（行为不变：LLM 兜底
+    // 仍最晚执行、仍不 await、失败回退文案照发），见 plugins/chat.js
     const senderName = event.sender?.card || event.sender?.nickname || '群友';
     const cmdReply = registry.dispatch({
       lingo: lingo,
@@ -331,20 +338,11 @@ export function createApp(config, overrides = {}) {
       userName: senderName,
       text: question,
     });
-    if (cmdReply !== null) {
+    if (typeof cmdReply === 'string') {
       log(`[group ${event.group_id}] 指令响应: ${question.slice(0, 30)}`);
-      if (typeof cmdReply === 'string') {
-        client.sendGroupMsg(event.group_id, cmdReply).catch((e) => err(`[group ${event.group_id}] 指令发送失败:`, e.message));
-      }
-      return;
+      client.sendGroupMsg(event.group_id, cmdReply).catch((e) => err(`[group ${event.group_id}] 指令发送失败:`, e.message));
     }
-
-    // S13 AI 兜底：不 await；reply 非空才发送（chat 内部失败已回退 defaultReply 文案照发，仅发送失败走 catch）
-    brain.chat(event.group_id, senderName, question, event.user_id)
-      .then((reply) => {
-        if (reply) return client.sendGroupMsg(event.group_id, reply);
-      })
-      .catch((e) => err(`[chat] 群 ${event.group_id} 发送失败:`, e.message));
+    return;
   });
 
   /** WebUI/状态页共享的状态快照（characters/relics/pools 计数前先确保 arkdb 已 load） */
@@ -364,15 +362,14 @@ export function createApp(config, overrides = {}) {
 
   /**
    * 启动（全部启动副作用在此，createApp 本身不碰网络/定时器）：
-   * 挂退出信号 → registry.startAll（P3b：refresh 数据自动更新定时器 + report 每日 9:00 调度
-   * 在此启动——原 start 内 setTimeout 段与 scheduler.start(dailyReport) 已迁插件 hooks）→
-   * client.connect() 建 WS → 按 webui.enabled 起面板（P3c 后并入插件）。
+   * 挂退出信号 → registry.startAll（P3 收尾：refresh 数据自动更新定时器 + report 每日 9:00
+   * 调度 + webui 面板按配置起停均经插件 hooks，原 start 内 setTimeout/scheduler.start/WebUI
+   * 直建段已全部迁出）→ client.connect() 建 WS。
    * @returns {void}
    */
   function start() {
-    // 生命周期收尾（注册先于一切启动副作用）：registry.stopAll 逆序停插件（report 先停每日
-    // 调度器、refresh 再清自动更新定时器——顺序与旧实现 scheduler→client 一致），再关 WS，
-    // 随后退出进程
+    // 生命周期收尾（注册先于一切启动副作用）：registry.stopAll 逆序停插件（webui 先关面板、
+    // report 停每日调度器、refresh 清自动更新定时器），再关 WS，随后退出进程
     for (const sig of ['SIGINT', 'SIGTERM']) {
       process.on(sig, () => {
         log('收到退出信号，正在关闭...');
@@ -382,27 +379,17 @@ export function createApp(config, overrides = {}) {
     }
 
     // 后台插件启动（§3 步骤 3+6）：refresh hooks.start 注册数据自动更新定时器（先于 connect，
-    // 与旧顺序相同；仅 dataRefresh.enabled !== false 时启用）→ report hooks.start 排下一个 9:00
+    // 与旧顺序相同；仅 dataRefresh.enabled !== false 时启用）→ report hooks.start 排下一个
+    // 9:00 → webui hooks.start 按 webui.enabled !== false 起面板
     registry.startAll();
 
     // 启动收尾：connect 异步建 WS（置 closed 后不再重连）
     client.connect();
 
-    // Web 管理面板
-    if (config.webui?.enabled !== false) {
-      const webui = new WebUI(config.webui || {});
-      webui.start({
-        getStatus,
-        getLingo: () => lingo,
-        getConfig: () => config,
-        refreshData,
-      });
-    }
-
     log('QQ 群聊概括机器人已启动（仅 @ 触发总结；每日 9:00 发送昨日日报）');
   }
 
-  /** 优雅停服（退出信号与测试共用）：registry.stopAll（report 停调度、refresh 清定时器）→ 关 WS；不 exit（信号路径自行 exit） */
+  /** 优雅停服（退出信号与测试共用）：registry.stopAll（webui 关面板、report 停调度、refresh 清定时器）→ 关 WS；不 exit（信号路径自行 exit） */
   function stop() {
     registry.stopAll();
     client.close();

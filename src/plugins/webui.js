@@ -1,22 +1,33 @@
 /*
- * Web 管理面板：零依赖（node:http + 内联 HTML）的本地服务，提供运行状态、本地词典管理、手动数据刷新
- * 与脱敏配置查看；页面为 _html() 返回的内联模板字符串（勿改模板文案/脚本）。
- * start(ctx) 注入契约 4 成员：{ getStatus(): Object, getLingo(): LingoStore, getConfig(): Object,
- * refreshData(): Promise<string> }——由 index.js 底部装配处（webui.enabled !== false 时）提供。
+ * Web 管理面板插件（P3c 由 src/webui.js 迁入并插件化：class WebUI 原样保留 + hooks 包装）。
  *
- * 鉴权：_handle 入口由 _authorized 统一拦截（Authorization: Bearer <token> 或 URL ?token=；token 为空则免鉴权）。
- * 脱敏：仅 /api/config 出口经 _maskedConfig（llm.apiKey 留首 6 尾 4 加省略号、napcat.accessToken 置 ***）。
- * 路由表：GET /、/index.html → 页面；GET /api/status → 状态快照；GET /api/lingo → 词条列表；
- * POST /api/lingo → 学词/删词；POST /api/refresh → 手动刷新（共用 §6.3 refreshData）；GET /api/config → 脱敏配置；
- * 其余 404；_handle 抛错由 start 内联 catch 兜成 500 JSON。
+ * Web 管理面板：零依赖（node:http + 内联 HTML）的本地服务，提供运行状态、本地词典管理、
+ * 手动数据刷新与脱敏配置查看；页面为 _html() 返回的内联模板字符串（勿改模板文案/脚本）。
+ * start(ctx) 注入契约 4 成员：{ getStatus(): Object, getLingo(): LingoStore, getConfig(): Object,
+ * refreshData(): Promise<string> }——由 core/runtime.js 装配期把闭包注入 createWebUiPlugin(deps)。
+ *
+ * 鉴权：_handle 入口由 _authorized 统一拦截（Authorization: Bearer <token> 或 URL ?token=；
+ * token 为空则免鉴权）。脱敏：仅 /api/config 出口经 _maskedConfig（llm.apiKey 留首 6 尾 4 加
+ * 省略号、napcat.accessToken 置 ***）。路由表：GET /、/index.html → 页面；GET /api/status →
+ * 状态快照；GET /api/lingo → 词条列表；POST /api/lingo → 学词/删词；POST /api/refresh →
+ * 手动刷新（共用 §6.3 refresh runner）；GET /api/config → 脱敏配置；其余 404；_handle 抛错
+ * 由 start 内联 catch 兜成 500 JSON。
+ *
+ * 消息面：无（仅 hooks 插件——handleMessage 恒 null；priority 0 不占分发带，同 report）。
+ * hooks.start → cfg.enabled !== false 时 new WebUI 并 listen（原 runtime.start 末段）；
+ * hooks.stop → server.close()（原实现无停服路径、依赖 process.exit，插件化后补上，属无害增强）。
+ *
+ * 依赖：node:http、core/logger；实例化点：core/runtime.js createApp（startCtx 4 成员闭包注入）。
+ * 读写数据：读 lingo/arkdb/analytics（经 startCtx.getStatus/getLingo）；写词典经 getLingo()；
+ * 刷新触发经 refreshData（桥接 refresh 插件 api，P3b）。
  */
 import http from 'node:http';
-import { log } from './core/logger.js';
+import { log } from '../core/logger.js';
 
 // 简单的 Web 管理面板（Node 内置 http，零依赖）
 // API: /api/status /api/lingo /api/refresh /api/config
 /**
- * 管理面板 HTTP 服务（默认 127.0.0.1:5210；由 index.js 按 webui.enabled 条件装配）。
+ * 管理面板 HTTP 服务（默认 127.0.0.1:5210；由 runtime 经 webui 插件 hooks.start 按 webui.enabled 条件装配）。
  *
  * @param {Object} [cfg={}] - config.webui 配置子集
  * @param {number} [cfg.port=5210] - 监听端口
@@ -50,6 +61,17 @@ export class WebUI {
     this.server.listen(this.port, this.host, () => {
       log(`[webui] 管理面板已启动: http://${this.host}:${this.port}${this.token ? ' （需 token）' : ''}`);
     });
+  }
+
+  /**
+   * 停服：关闭 HTTP server（未 listen/已停时无操作；关闭是异步的，不再接受新连接）。
+   * @returns {void}
+   */
+  stop() {
+    if (this.server) {
+      this.server.close();
+      this.server = null;
+    }
   }
 
   /** 鉴权判定：Header `Authorization: Bearer` 或 URL query token 任一等于配置 token 即放行；未配置 token 恒放行 */
@@ -127,7 +149,7 @@ export class WebUI {
       }
     }
 
-    // 手动刷新（触发源：WebUI；与启动定时器/群指令 S11 共用 §6.3 refreshData，此处不传群号）
+    // 手动刷新（触发源：WebUI；与启动定时器/群指令 S11 共用 §6.3 refresh runner，此处不传群号）
     if (p === '/api/refresh' && m === 'POST') {
       const result = await this.ctx.refreshData();
       return this._json(res, { ok: true, result });
@@ -269,4 +291,43 @@ setInterval(loadStatus, 10000);
 </body>
 </html>`;
   }
+}
+
+/**
+ * Web 管理面板插件描述符构造：{name:'webui', priority: 0, handleMessage, hooks:{start,stop}}。
+ * 仅 hooks 插件（无消息面）：hooks.start 按 cfg.enabled !== false 起面板（原 runtime.start 末段）；
+ * hooks.stop 关停（原实现无停服路径、依赖 process.exit——插件化后补上，属无害增强）。
+ * @param {Object} deps - runtime 装配期注入
+ * @param {Object} deps.cfg - config.webui 子集（{port?, host?, token?, enabled?}；enabled 缺省视为开）
+ * @param {Object} deps.startCtx - start(ctx) 注入契约 4 成员（见 class WebUI JSDoc）——
+ *   getStatus/getLingo/getConfig/refreshData 均为 runtime 闭包
+ * @returns {Object} 注册表可直接 register 的插件描述符
+ */
+export function createWebUiPlugin(deps) {
+  const { cfg, startCtx } = deps;
+  let webui = null;
+  return {
+    name: 'webui',
+    // 仅 hooks 插件：0 不占分发带（handleMessage 恒 null，永不认领消息）；start 次序无关
+    priority: 0,
+    handleMessage() {
+      return null;
+    },
+    hooks: {
+      /** 按配置起面板（webui.enabled !== false 时 listen；端口占用等错误冒泡由 registry 记日志） */
+      start() {
+        if (cfg.enabled !== false) {
+          webui = new WebUI(cfg);
+          webui.start(startCtx);
+        }
+      },
+      /** 停服：关闭 HTTP server（未起/已停时无操作） */
+      stop() {
+        if (webui) {
+          webui.stop();
+          webui = null;
+        }
+      },
+    },
+  };
 }

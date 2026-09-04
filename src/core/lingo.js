@@ -1,8 +1,8 @@
 // 本地梗词典模块：维护「词条 → 释义」映射（内存 Map + JSON 落盘，默认 data/lingo.json），供 AI 回答前的本地查词、群内「学习/删除词条」指令与管理面板使用。
 // 导出：LingoStore（class；公开字段 entries，公开方法 lookup/learn/delete/size）。
-// 依赖：Node 内置 fs/path/url、./logger.js（log）；实例化于 src/chat.js 的 ChatBot（new LingoStore(cfg.lingoFile)），
-// 经其上下文注入指令插件 ctx，并经 getLingo() 供 src/webui.js 访问。
-// 数据：读写 data/lingo.json（词条 → 释义的 JSON 对象）；文件路径来自 ChatBot 配置 cfg.lingoFile。
+// 依赖：Node 内置 fs/path/url、./logger.js（log）；实例化于 core/runtime.js（P3 知识服务上移，
+// 注入 ChatBrain 与插件 ctx），并经 getLingo() 供 webui 插件访问。
+// 数据：读写 data/lingo.json（词条 → 释义的 JSON 对象）；文件路径来自 config.llm 的 lingoFile（runtime 装配期解析）。
 
 import fs from 'node:fs';
 import path from 'node:path';

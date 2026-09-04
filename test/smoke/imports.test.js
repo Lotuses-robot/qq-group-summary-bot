@@ -29,11 +29,10 @@ const EXPECTED_EXPORTS = {
   'core/scheduler.js': ['Scheduler'],
   'core/store.js': ['MessageStore', 'segmentToText', 'extractText', 'localDate', 'hhmm', 'fmtFull'],
   'core/summarizer.js': ['Summarizer'],
-  'webui.js': ['WebUI'],
   'core/wiki.js': ['WikiRetriever', 'extractKeywords', 'isArknightsRelated'],
   'core/wikipedia.js': ['WikipediaRetriever'],
   'plugins/ark.js': ['createArkPlugin'],
-  'plugins/chat.js': ['ChatBrain'],
+  'plugins/chat.js': ['ChatBrain', 'createChatPlugin'],
   'plugins/gacha.js': ['createGachaPlugin'],
   'plugins/index.js': ['commandPlugins'],
   'plugins/lingo.js': ['createLingoPlugin'],
@@ -41,6 +40,7 @@ const EXPECTED_EXPORTS = {
   'plugins/refresh.js': ['createRefreshPlugin'],
   'plugins/stats.js': ['createStatsPlugin'],
   'plugins/summary.js': ['createSummaryPlugin'],
+  'plugins/webui.js': ['WebUI', 'createWebUiPlugin'],
 };
 
 describe('模块导入冒烟', () => {

@@ -14,9 +14,14 @@
  * 经 ctx/getLingo() 借用的也是同一实例。
  * 依赖：logger、core/wiki.js 纯函数；实例化点：core/runtime.js 装配（deps 注入）。
  * 读写数据：读 lingo/arkdb/cache（注入实例）；调 LLM（fetch）；仅内存写 groupHistory/groupSpeakers。
+ *
+ * P3c 追加 chat 分发插件（createChatPlugin）：原路由 S13 语义内化为分发带末端（PRIORITY.chat
+ * 300）——handleMessage 恒返回 true 消费消息并自驱异步 brain.chat（不 await），LLM 兜底仍
+ * 最后执行、失败回退文案照发；runtime 不再有「dispatch 落空 → 直调 brain」的分叉。
  */
-import { log } from '../core/logger.js';
+import { log, err } from '../core/logger.js';
 import { isArknightsRelated, extractKeywords } from '../core/wiki.js';
+import { PRIORITY } from '../core/registry.js';
 
 // 来源可信度权重（分数越高越可信）
 const SOURCE_TRUST = {
@@ -439,4 +444,35 @@ export class ChatBrain {
   clearHistory(groupId) {
     this.groupHistory.delete(groupId);
   }
+}
+
+/**
+ * LLM 兜底分发插件描述符构造：{name:'chat', priority: PRIORITY.chat, handleMessage}。
+ * 原路由 S13 语义内化为分发带末端：恒返回 true（消息必被消费）并自驱异步 brain.chat——
+ * 调用方不 await；reply 非空才发送（brain 内部失败已回退 defaultReply 文案照发，
+ * 仅发送失败走 catch 记日志，与旧 S13 完全一致）。
+ * @param {Object} deps - runtime 装配期注入
+ * @param {Object} deps.brain - ChatBrain 实例（共享单例；chat(groupId, userName, text, userId)）
+ * @param {Object} deps.client - NapCatClient 实例（群发 brain 回复）
+ * @returns {Object} 注册表可直接 register 的插件描述符
+ */
+export function createChatPlugin(deps) {
+  const { brain, client } = deps;
+  return {
+    name: 'chat',
+    priority: PRIORITY.chat,
+    /**
+     * LLM 兜底分发（原 S13；分发带最末，必被到达）：触发 brain.chat 后立即返回 true。
+     * @param {Object} ctx - 消息上下文（runtime S12 分发）：{groupId, userName, userId, text, ...}
+     * @returns {true} 恒消费（chatEnabled=false 时 brain.chat 短路返回 null → 无回复但已处理）
+     */
+    handleMessage(ctx) {
+      brain.chat(ctx.groupId, ctx.userName, ctx.text, ctx.userId)
+        .then((reply) => {
+          if (reply) return client.sendGroupMsg(ctx.groupId, reply);
+        })
+        .catch((e) => err(`[chat] 群 ${ctx.groupId} 发送失败:`, e.message));
+      return true;
+    },
+  };
 }
