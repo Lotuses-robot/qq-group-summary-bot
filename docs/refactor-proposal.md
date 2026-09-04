@@ -86,7 +86,7 @@ test/                 # node:test（无新依赖）：baseline/（行为基线�
 6. extractQuestion 只剥 1–2 前导 @，尾部 @ 原样入 chat——勿"修复"（连带 §P3 差异项）
 7. 手动总结按 ctx.text（剥 @ 后）判：尾部 @ 文本不阻断关键词命中；与旧 S8 完整文本判的差异已定案不回退（见「P3 期间发现的行为差异」）
 8. 空@回复与关键词检查的旧序差异仅当关键词含 @ 时出现 → README/architecture 已注明
-9. core/ 下移后默认路径核对（`__dirname/..` 仍指根 data/）——P1 已核对；P5 归类未再加深 core/ 深度（platform/knowledge 不涉 dataDir 相对计算，runtime 留顶层）→ 无需复核对
+9. core/ 下移后默认路径核对（`__dirname/..` 仍指根 data/）——P1 已核对；⚠️ P5 归类时曾误判「platform/knowledge 不涉相对路径计算」——实际 logger 的 logsDir 与 knowledge 组 lingo/cache/arkdb 三个 DEFAULT_* 都做 `__dirname` 相对计算，P5a 后全部指向 src/ 下（src/logs、src/data）。2026-09-04 回归修复：四处在源码同步加 `../..` → `../../..` 并注明层级。教训：移动文件后 grep 所有 `__dirname|fileURLToPath` 使用点逐一定级，勿按「目录职责」推断。
 10. 注册顺序 + 稳定排序须确定性（registry 测试）
 11. **P5 拆块**：S 链判定顺序与文案零改动（runtime-dispatch 锁 S10 文案/紧贴@ 语义/learn/chat 兜底）；createRouting 必须先于插件注册段（getAllGroupIds 失去函数声明提升）；state 对象化后读取点（isReady/getStatus/S1）无漏网闭包引用；imports.test 键表随归类同 commit 同步
 

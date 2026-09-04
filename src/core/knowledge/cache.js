@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { log } from '../platform/logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_CACHE_FILE = path.resolve(__dirname, '..', '..', 'data', 'knowledge_cache.json');
+// knowledge/（P5a 归类）比原 src/ 深两层：项目根 = __dirname/../../..（config 缺省时才用此默认）
+const DEFAULT_CACHE_FILE = path.resolve(__dirname, '..', '..', '..', 'data', 'knowledge_cache.json');
 
 /**
  * 知识缓存存储：键不区分大小写并去除首尾空白；每次 set 立即落盘，get 校验 TTL；缓存文件损坏时自动降级为空缓存（仅记日志）。

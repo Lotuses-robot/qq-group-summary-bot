@@ -17,7 +17,8 @@ import { fileURLToPath } from 'node:url';
 import { log } from '../platform/logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_DATA_DIR = path.resolve(__dirname, '..', '..', 'data', 'ark');
+// knowledge/（P5a 归类）比原 src/ 深两层：项目根 = __dirname/../../..（config 缺省时才用此默认）
+const DEFAULT_DATA_DIR = path.resolve(__dirname, '..', '..', '..', 'data', 'ark');
 
 /**
  * 明日方舟本地数据库：四表懒加载（load，幂等）+ 名称/藏品查询与语义模糊匹配 +

@@ -8,7 +8,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(__dirname, '..', '..');
+// platform/（P5a 归类）比原 src/ 深两层：项目根 = __dirname/../../..
+const root = path.resolve(__dirname, '..', '..', '..');
 const logsDir = path.join(root, 'logs');
 
 fs.mkdirSync(logsDir, { recursive: true });
