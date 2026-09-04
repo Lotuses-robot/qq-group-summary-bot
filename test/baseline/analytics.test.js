@@ -11,8 +11,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { Analytics } from '../../src/analytics.js';
-import { localDate } from '../../src/store.js';
+import { Analytics } from '../../src/core/analytics.js';
+import { localDate } from '../../src/core/store.js';
 import { cleanupTmpDirs, makeTmp, seedMessages, silenceLog, trackDbClose } from '../helpers.js';
 
 after(silenceLog());

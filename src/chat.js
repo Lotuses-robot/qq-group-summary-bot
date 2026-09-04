@@ -10,13 +10,13 @@
  * groupSpeakers（群 → 昵称/QQ → 「群友N」匿名代号映射；每群上限 200、先到先得满了逐出最早，
  * 匿名机制见 docs/external-apis.md §5）。
  */
-import { log } from './logger.js';
-import { WikiRetriever, isArknightsRelated, extractKeywords } from './wiki.js';
-import { MoegirlRetriever } from './moegirl.js';
-import { WikipediaRetriever } from './wikipedia.js';
-import { LingoStore } from './lingo.js';
-import { KnowledgeCache } from './cache.js';
-import { ArkDB } from './arkdb.js';
+import { log } from './core/logger.js';
+import { WikiRetriever, isArknightsRelated, extractKeywords } from './core/wiki.js';
+import { MoegirlRetriever } from './core/moegirl.js';
+import { WikipediaRetriever } from './core/wikipedia.js';
+import { LingoStore } from './core/lingo.js';
+import { KnowledgeCache } from './core/cache.js';
+import { ArkDB } from './core/arkdb.js';
 
 // 来源可信度权重（分数越高越可信）
 const SOURCE_TRUST = {

@@ -12,9 +12,9 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 
 import { tryCommand } from '../../src/commands.js';
-import { LingoStore } from '../../src/lingo.js';
-import { ArkDB } from '../../src/arkdb.js';
-import { Analytics } from '../../src/analytics.js';
+import { LingoStore } from '../../src/core/lingo.js';
+import { ArkDB } from '../../src/core/arkdb.js';
+import { Analytics } from '../../src/core/analytics.js';
 import { makeTmp, cleanupTmpDirs, silenceLog, todayLabel, trackDbClose, withRand, writeArkTables } from '../helpers.js';
 
 after(silenceLog());

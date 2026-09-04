@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { LingoStore } from '../../src/lingo.js';
+import { LingoStore } from '../../src/core/lingo.js';
 import { cleanupTmpDirs, makeTmp, silenceLog } from '../helpers.js';
 
 after(silenceLog());

@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { ArkDB } from '../../src/arkdb.js';
+import { ArkDB } from '../../src/core/arkdb.js';
 import { cleanupTmpDirs, makeTmp, silenceLog, todayLabel, withRand, writeArkTables } from '../helpers.js';
 
 after(silenceLog());

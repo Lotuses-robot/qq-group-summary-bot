@@ -11,7 +11,7 @@
  * 其余 404；_handle 抛错由 start 内联 catch 兜成 500 JSON。
  */
 import http from 'node:http';
-import { log } from './logger.js';
+import { log } from './core/logger.js';
 
 // 简单的 Web 管理面板（Node 内置 http，零依赖）
 // API: /api/status /api/lingo /api/refresh /api/config

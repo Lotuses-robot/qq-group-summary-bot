@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { log } from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_DATA_DIR = path.resolve(__dirname, '..', 'data', 'ark');
+const DEFAULT_DATA_DIR = path.resolve(__dirname, '..', '..', 'data', 'ark');
 
 /**
  * 明日方舟本地数据库：四表懒加载（load，幂等）+ 名称/藏品查询与语义模糊匹配 +
@@ -25,7 +25,7 @@ const DEFAULT_DATA_DIR = path.resolve(__dirname, '..', 'data', 'ark');
  */
 export class ArkDB {
   /**
-   * @param {string} [dataDir=DEFAULT_DATA_DIR] - 数据目录（默认 src/../data/ark），测试可注入
+   * @param {string} [dataDir=DEFAULT_DATA_DIR] - 数据目录（默认项目根 data/ark），测试可注入
    */
   constructor(dataDir = DEFAULT_DATA_DIR) {
     this.dataDir = dataDir;
@@ -388,7 +388,7 @@ export class ArkDB {
     this.load();
     const weights = { TIER_6: 0.02, TIER_5: 0.08, TIER_4: 0.5, TIER_3: 0.4 };
     const stars = { TIER_6: '★★★★★★', TIER_5: '★★★★★', TIER_4: '★★★★', TIER_3: '★★★' };
-    const pool = [...this.characters.values()].filter((c) => c.name && weights[c.rarity] && this._isOperator(c) && !c.spChar);
+    const pool = [...this.characters.values()].filter((c) => c.name && weights[c.rarity] && this.isOperator(c) && !c.spChar);
     const pickOne = () => {
       let r = Math.random();
       for (const [tier, w] of Object.entries(weights)) {
@@ -409,10 +409,44 @@ export class ArkDB {
 
   // ---- 真实卡池系统 ----
 
-  // 是否为可抽取的真实干员（排除召唤物 TOKEN / 陷阱 TRAP / 不可获取的预备干员）
-  _isOperator(c) {
+  /**
+   * 判定某干员是否为「可抽取的真实干员」（排除召唤物 TOKEN/陷阱 TRAP 职业
+   * 与不可获取的预备干员 isNotObtainable）——randomPull/pullFromPool 的候选池
+   * 过滤用；插件/外部 diff（如数据更新播报）不再直读职业白名单与私有标记。
+   * @param {Object} c - 干员基础对象（load 后的 characters 条目或同形对象）
+   * @returns {boolean} 可抽取为 true；空对象/缺 profession 恒 false
+   */
+  isOperator(c) {
     return ['MEDIC', 'WARRIOR', 'SPECIAL', 'SNIPER', 'SUPPORT', 'TANK', 'PIONEER', 'CASTER'].includes(c.profession)
       && !c.notObtainable;
+  }
+
+  /**
+   * 快照当前全部可获取高星干员（6★/5★ operator），供数据刷新前后的新增对比
+   * （refresher → runtime.refreshData 的「数据更新播报」diff）。
+   * 副作用: 首次触发 load
+   * @returns {Array<{id: string, name: string, rarity: string}>} 快照数组（浅拷贝，改返回值不影响库内表）
+   */
+  snapshotHighOps() {
+    this.load();
+    const out = [];
+    for (const c of this.characters.values()) {
+      if (c.name && (c.rarity === 'TIER_6' || c.rarity === 'TIER_5') && this.isOperator(c)) {
+        out.push({ id: c.id, name: c.name, rarity: c.rarity });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 快照当前全部卡池条目（含已关闭/未开放池——开放与否的过滤留给调用方按时间窗做），
+   * 供数据刷新前后「新开放卡池」对比用。
+   * 副作用: 首次触发 load
+   * @returns {Object[]} 卡池浅拷贝数组（逐条 {...p}，改返回值不影响库内表）
+   */
+  snapshotGachaPools() {
+    this.load();
+    return this.gachaPools.map((p) => ({ ...p }));
   }
 
   /**
@@ -470,7 +504,7 @@ export class ArkDB {
     const stars = { TIER_6: '★★★★★★', TIER_5: '★★★★★', TIER_4: '★★★★', TIER_3: '★★★' };
     const byTier = { TIER_6: [], TIER_5: [], TIER_4: [], TIER_3: [] };
     for (const c of this.characters.values()) {
-      if (!c.name || !byTier[c.rarity] || !this._isOperator(c)) continue;
+      if (!c.name || !byTier[c.rarity] || !this.isOperator(c)) continue;
       // 异格/联动限定干员（isSpChar）仅在其 UP 卡池中可抽取
       if (c.spChar && !upSet6.has(c.id) && !upSet5.has(c.id)) continue;
       byTier[c.rarity].push(c);

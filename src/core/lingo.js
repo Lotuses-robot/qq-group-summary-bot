@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { log } from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_LINGO_FILE = path.resolve(__dirname, '..', 'data', 'lingo.json');
+const DEFAULT_LINGO_FILE = path.resolve(__dirname, '..', '..', 'data', 'lingo.json');
 
 /**
  * 词典存储：lookup 为忽略大小写的子串包含匹配（按插入序返回首个命中）；每次 learn/delete 后立即落盘；磁盘文件损坏时降级为空词典（仅记日志）。

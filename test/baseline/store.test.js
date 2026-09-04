@@ -15,7 +15,7 @@ import path from 'node:path';
 
 import {
   MessageStore, segmentToText, extractText, localDate, hhmm, fmtFull,
-} from '../../src/store.js';
+} from '../../src/core/store.js';
 import { cleanupTmpDirs, makeTmp, seedMessages, silenceLog } from '../helpers.js';
 
 after(silenceLog());
