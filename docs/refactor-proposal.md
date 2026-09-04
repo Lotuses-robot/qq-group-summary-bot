@@ -1,6 +1,6 @@
 # 重构提案（存档）：「core 主运行库 + 插件注册 + 插件」
 
-> **状态：已实施**。P0–P3 迁移路线已于 2026-09 按本设计落地（P4 收尾同步文档）；P5（2026-09）对 core 做子目录归类（platform/ + knowledge/）并把消息路由判定域从 runtime.js 拆到 core/routing.js——**本树为 P5 后形态（文档先行提交在前，代码归类 P5a/P5b 紧随）**。本文档保留为**决策记录**：
+> **状态：已实施**。P0–P3 迁移路线已于 2026-09 按本设计落地（P4 收尾同步文档）；P5（2026-09）对 core 做子目录归类（platform/ + knowledge/）并把消息路由判定域从 runtime.js 拆到 core/routing.js——**本树为 P5 后形态**（文档先行 e411a9c → 归类 P5a 5de0e7e → 拆块 P5b 068f40b）。本文档保留为**决策记录**：
 > 目标架构与实施记录、行为保真清单（改造红线）、已知坑（与 architecture.md §8 互补）、仍开放的独立待办。
 > 改结构前先读本节；行为红线以 CLAUDE.md 与 architecture.md §8 为准。
 
@@ -74,7 +74,7 @@ test/                 # node:test（无新依赖）：baseline/（行为基线�
 | P2 | 4 指令插件 + registry dispatch 替换路由段；git rm commands.js | 命令基线改走插件断言文本原样 | ✅ 完成（ce1e1f0） |
 | P3 | summary/report/refresh/chat/webui 五插件（P3a chat / P3b 后台三件 / P3c webui + 分发带收尾）；git rm chat.js/webui.js | 基线绿 + 冒烟 134 例 + **真机冒烟五路径待用户执行** | ✅ 完成（1724822/f98d760/42b5192） |
 | P4 | README 更新 + 死配置 TODO + 收尾 | 全量测试 + 端到端验收 | ✅ 完成（6da34e5） |
-| P5 | core 子目录归类（platform/ 8 + knowledge/ 6，runtime/registry/routing 留顶层）+ 路由判定域拆 core/routing.js（文档先行） | 全量测试持续全绿；文档对账 grep | ✅ 本行随 P5c' 文档先行提交；代码落地 P5a/P5b 后进行中，复核段（「行为保真清单」P5 项与 §7 依赖图）收尾时改为完成 |
+| P5 | core 子目录归类（platform/ 8 + knowledge/ 6，runtime/registry/routing 留顶层）+ 路由判定域拆 core/routing.js（文档先行） | 全量测试持续全绿（P5b 后 142 例）；文档对账 grep | ✅ 完成（P5c' e411a9c → P5a 5de0e7e → P5b 068f40b；P5a 键表同步、P5b 新增 routing-backfill 直测 6 例锁 S1/backfill/getAllGroupIds 空档） |
 
 ## 风险清单（迁移时逐条对照，P4 复核；P5 拆块复核项加粗）
 

@@ -67,7 +67,7 @@ logs/           日志
 config.example.json / config.json   配置模板（脱敏）与实配（含密钥）
 ```
 
-模块行数规模（2026-09，P5 落地后估算，含注释/空行）：src/ 合计约 4.9k 行——core/ ≈3.4k（runtime.js ≈250 行装配叙事、routing.js ≈200 行路由判定域、registry.js ≈140、platform/ ≈1.4k、knowledge/ ≈1.4k）、plugins/ ≈1.6k。
+模块行数规模（2026-09，P5 落地后实测，含注释/空行）：src/ 合计约 5.0k 行——core/ ≈3.4k（runtime.js 269 行装配叙事、routing.js 225 行路由判定域、registry.js 137、platform/ 1.4k、knowledge/ 1.4k）、plugins/ ≈1.6k。
 
 ## 3. 启动装配顺序（createApp 纯装配 → start() 副作用）
 
