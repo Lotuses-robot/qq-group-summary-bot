@@ -1,16 +1,18 @@
 /**
- * P5b 冒烟：core/routing.js 直测——S1 connect/backfill/getAllGroupIds 空档补锁。
+ * P5b 冒烟：core/routing.js 直测——S1 connect/disconnect/backfill/getAllGroupIds 空档补锁。
  *
- * 背景：这三段原是 runtime.js createApp 闭包（依赖函数声明提升），P5b 拆出后工厂化；
- * 此前**无任何测试覆盖** connect/backfill 路径——拆块恰好是补行为锁的时机。S2–S13
- * 其余判定（@检测/静默门/剥 @/分发带）已由 runtime-dispatch 全链测试锁定，此处不重复。
+ * 背景：connect/backfill/群枚举原是 runtime.js createApp 闭包（依赖函数声明提升），P5b
+ * 拆出后工厂化；此前**无任何测试覆盖**这些路径——拆块恰好是补行为锁的时机（disconnect
+ * 复位分支系 2026-09 坑 2 修复新增，一并在此锁定）。S2–S13 其余判定（@检测/静默门/剥
+ * @/分发带）已由 runtime-dispatch 全链测试锁定，此处不重复。
  *
  * 锁定目标：① S1 connect 置位 state（ready/wsConnected/selfId 回填）并仅执行一次
  * backfill（backfillDone 置位后二次 connect 不再拉）；② backfill 语义：time<sinceTs 过滤、
  * 批内重复 message_id 去重、addHistoryMessage 真值才 analytics.record、有新增才
  * setLastSeenTs（取批内最新 time）；③ get_login_info 失败：记日志继续 backfill（原 S1
  * catch 语义，selfId 保持 0）；④ getAllGroupIds：get_group_list 成功取 group_id 列表，
- * 调用失败回退 store.trackedGroupIds。
+ * 调用失败回退 store.trackedGroupIds；⑤ S1 disconnect：仅复位 wsConnected（ready/
+ * backfillDone 不动；重连后 connect 置回且不重复 backfill）。
  *
  * 直接构造 createRouting（不经 createApp），fake 全内存；连接工厂参数以 over 覆盖默认。
  */
@@ -146,5 +148,33 @@ describe('routing：getAllGroupIds 与 backfill 群集合选择', () => {
     await flush();
     assert.equal(calls.getHistory, 2); // 111、222 两群（get_group_list 返回空 → 回退磁盘群）
     assert.equal(calls.added.length, 2);
+  });
+});
+
+describe('routing：S1 disconnect → wsConnected 复位（2026-09 修复坑 2）', () => {
+  it('disconnect 仅复位 wsConnected；ready/backfillDone 不动；重连置回且不重复 backfill', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const { routing, state, calls } = mkRouting({
+      tracked: [7],
+      messages: [{ message_id: 'a', time: now }],
+    });
+    routing.onEvent(connectEvent());
+    await flush();
+    assert.equal(state.ready, true);
+    assert.equal(state.wsConnected, true);
+    assert.equal(state.backfillDone, true);
+
+    // WS 断开（napcat close 回调合成 lifecycle/disconnect 事件，见 napcat.js）：同步复位在线标志
+    routing.onEvent({ post_type: 'meta_event', meta_event_type: 'lifecycle', sub_type: 'disconnect' });
+    assert.equal(state.wsConnected, false);
+    assert.equal(state.ready, true);      // 断线期间无入站消息：就绪锚点不回落
+    assert.equal(state.backfillDone, true);
+
+    // 重连后 connect 事件置回在线；backfillDone 保持「仅一次」→ 不重复补偿拉取
+    routing.onEvent(connectEvent());
+    await flush();
+    assert.equal(state.wsConnected, true);
+    assert.equal(state.ready, true);
+    assert.equal(calls.getHistory, 1);
   });
 });

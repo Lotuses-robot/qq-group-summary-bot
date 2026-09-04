@@ -173,6 +173,7 @@ logger（core/platform/logger.js）← core 全部服务 + 全部插件（runtim
        platform/ 内与 knowledge/ 内同组引用为同级/上跳一级，plugins 经 ../core/platform/logger.js）
 wiki（knowledge 组纯函数 extractKeywords/isArknightsRelated）← moegirl、wikipedia、chat 插件
 store（platform 组 fmtFull/hhmm）← summarizer、summary 插件、routing（fmtFull）
+http（platform 组 fetchRetry，2026-09 加固）← summarizer、moegirl、chat 插件（_reply 的 LLM 调用）
 registry（core 顶层，PRIORITY 常量）← lingo/ark/gacha/stats/chat/refresh/summary 插件（读带号）
 routing（core 顶层）← platform 组 logger/store（静态，fmtFull/log）+ 其余服务全经 createRouting
         options 注入（零插件工厂 import；S12 经注入的 registry 分发）

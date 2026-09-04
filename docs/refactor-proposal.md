@@ -58,7 +58,7 @@ test/                 # node:test（无新依赖）：baseline/（行为基线�
 - **config 键名/schema 完全不动**；原设计「新增可选 `plugins.<name>.enabled`（默认全开）」**未实施**（注册表描述符支持 enabled 字段、运行时未映射 config——需要时按此键补即可）。⚠️ 差异
 - **14 条指令正则按域整段搬移、未合并**；跨插件无前缀碰撞（已逐对验证）。✅ 域内序 = 文件内代码序、域间序 = PRIORITY 带。
 - **report/webui 仅 hooks、priority 0**（不占 300/200 带）：无消息面却要参与 startAll 排序的场景归 0 带，handleMessage 恒 null；registry 测试断言 PRIORITY keys，新增占带名须同步测试。✅
-- **core/ 不 import 任何 plugins** ⚠️ 唯一豁免：runtime.js（装配者，位于 core/）必须 import 各插件工厂——插件侧仍零 core 服务 import（只 import logger/registry 常量/wiki 纯函数/store 工具）。P5 拆出的 core/routing.js **不 import 任何插件工厂**（S12 经注入的 registry 分发，options 注入其余全部服务）——豁免仍只落在 runtime.js。✅（P5 复核）
+- **core/ 不 import 任何 plugins** ⚠️ 唯一豁免：runtime.js（装配者，位于 core/）必须 import 各插件工厂——插件侧仍零 core 服务 import（只 import logger/registry 常量/wiki 纯函数/store 与 http.js 的 fetchRetry 静态工具）。P5 拆出的 core/routing.js **不 import 任何插件工厂**（S12 经注入的 registry 分发，options 注入其余全部服务）——豁免仍只落在 runtime.js。✅（P5 复核）
 
 ## P3 期间发现的行为差异（已决策：保持现语义，不回退）
 

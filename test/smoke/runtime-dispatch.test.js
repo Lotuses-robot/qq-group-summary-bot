@@ -8,7 +8,9 @@
  * ② chat 插件末端恒消费（指令落空文本最终到 brain.chat 且群发回复）；
  * ③ S10 空@ 固定回复不受插件化影响；④ 总结/刷新异步消费（true 不发送、无字符串）；
  * ⑤ start()/stop() 经 registry 生命周期（webui.enabled=false 不起面板、scheduler/refresh
- * hooks 不触发——真实定时行为已在 background-plugins.test.js 单测覆盖）。
+ * hooks 不触发——真实定时行为已在 background-plugins.test.js 单测覆盖）；
+ * ⑥ Scheduler 装配面（2026-09 修复坑 1）：report.hour/minute 传入构造、缺省回退 9:00、
+ * 遗留 schedule.* 死键不再生效。
  */
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -36,8 +38,10 @@ function atEvent(text, groupId = 9, userId = 555) {
   };
 }
 
-/** 全 fake 装配：store 语义最小化（addMessage 产出 rec.text = at@qq + 文本段拼接） */
-function mkApp() {
+/** 全 fake 装配：store 语义最小化（addMessage 产出 rec.text = at@qq + 文本段拼接）；
+ *  cfgOverrides/svcOverrides 增量覆盖基座（如传 { scheduler: null } 走真实 Scheduler——
+ *  其构造零副作用，start() 才起定时器） */
+function mkApp(cfgOverrides = {}, svcOverrides = {}) {
   const sent = [];
   const calls = { summarize: 0, learn: [], brainChat: null, schedulerStop: 0, close: 0 };
   let route;
@@ -86,6 +90,7 @@ function mkApp() {
     dataRefresh: { enabled: false },
     report: { userId: 0 },
     webui: { enabled: false }, // 面板不起（避免真实 listen 端口）
+    ...cfgOverrides,
   }, {
     store, client, summarizer: { summarize: async () => { calls.summarize++; return 'S'; } },
     scheduler, analytics: { record: () => {}, countMessages: () => 0 },
@@ -93,6 +98,7 @@ function mkApp() {
     cache: { get: () => null, set: () => {}, hit: () => {} },
     wiki: {}, moegirl: {}, wikipedia: {},
     brain,
+    ...svcOverrides,
   });
   return { app, send: (ev) => route(ev), sent, calls };
 }
@@ -171,5 +177,22 @@ describe('createApp 全链（P3 五插件装配面）', () => {
     app.stop();
     assert.equal(calls.close, 1);
     assert.equal(calls.schedulerStop, 1); // report hooks.stop → scheduler.stop
+  });
+});
+
+describe('Scheduler 装配（2026-09 修复坑 1：report.* 生效、schedule.* 废弃）', () => {
+  it('report.hour/minute 传入 Scheduler 构造（{dailyHour, dailyMinute}）', () => {
+    const { app } = mkApp(
+      { report: { userId: 1, minMessages: 100, hour: 10, minute: 45 }, schedule: { hour: 3, minute: 30 } },
+      { scheduler: null }, // 真实 Scheduler：构造零副作用，start() 才起定时器
+    );
+    assert.equal(app.services.scheduler.dailyHour, 10);
+    assert.equal(app.services.scheduler.dailyMinute, 45);
+  });
+
+  it('report 未配触发时刻回退 9:00——遗留 schedule.* 键不再生效（死键废弃）', () => {
+    const { app } = mkApp({ schedule: { hour: 3, minute: 30 } }, { scheduler: null });
+    assert.equal(app.services.scheduler.dailyHour, 9);
+    assert.equal(app.services.scheduler.dailyMinute, 0);
   });
 });
