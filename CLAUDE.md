@@ -56,7 +56,7 @@ QQ 群聊机器人（NapCat / OneBot 11 / WS），Node ESM，LLM 生成群聊概
 - 不要在无讨论的情况下启动大规模结构改动（core/plugins 边界的移动会牵动注入面与测试）；
 - 新增功能时**不必**为未来抽象提前设计——指令/后台流程按当前惯例写进对应插件与装配段即可；
 - 若你发现"为加一个小功能必须动 runtime 路由链 + registry 分发语义"，先对照 refactor-proposal 剩余待办讨论，而不是临时发明第二套注册机制；
-- 独立待办（Analytics 首次 SQLite 导入同步阻塞，architecture §8 坑 5）尚未立项，别顺手修——见 refactor-proposal「待办」。
+- 已修待办：Analytics 历史 JSONL 现由 `runtime.start()` 的 `importHistory()` 后台分片异步导入（坑 5，2026-09 ✅：`record` 等热路径不再同步扫描；导入中统计指令回「稍后再试」、WebUI 状态行提示——见 refactor-proposal「待办」）。
 
 ## 仓库约定
 

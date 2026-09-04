@@ -10,7 +10,9 @@
  * ⑤ start()/stop() 经 registry 生命周期（webui.enabled=false 不起面板、scheduler/refresh
  * hooks 不触发——真实定时行为已在 background-plugins.test.js 单测覆盖）；
  * ⑥ Scheduler 装配面（2026-09 修复坑 1）：report.hour/minute 传入构造、缺省回退 9:00、
- * 遗留 schedule.* 死键不再生效。
+ * 遗留 schedule.* 死键不再生效；
+ * ⑦ 统计导入守卫（2026-09 修复坑 5）：importState==='running' 时活跃榜/群统计回
+ * 「历史消息导入中，请稍后再试」；'done'（默认 fake）不误触发、正常走聚合。
  */
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -93,7 +95,12 @@ function mkApp(cfgOverrides = {}, svcOverrides = {}) {
     ...cfgOverrides,
   }, {
     store, client, summarizer: { summarize: async () => { calls.summarize++; return 'S'; } },
-    scheduler, analytics: { record: () => {}, countMessages: () => 0 },
+    scheduler, analytics: {
+      record: () => {}, countMessages: () => 0,
+      importHistory: async () => {}, // 坑 5：start() 会调；importState 'done' 表示导入已完成
+      importState: 'done',
+      topActive: () => '【最近 7 天活跃榜】', groupStats: () => '【群消息统计】',
+    },
     refresher, lingo, arkdb: { snapshotHighOps: () => [], snapshotGachaPools: () => [], reload: () => {} },
     cache: { get: () => null, set: () => {}, hit: () => {} },
     wiki: {}, moegirl: {}, wikipedia: {},
@@ -173,10 +180,30 @@ describe('createApp 全链（P3 五插件装配面）', () => {
 
   it('start()/stop()：webui.enabled=false 不起面板，stop 走 registry 逆序并关 client', () => {
     const { app, calls } = mkApp();
-    app.start(); // 不抛（webui 不 listen；refresh schedule disabled 不挂定时器；scheduler fake）
+    app.start(); // 不抛（webui 不 listen；refresh schedule disabled 不挂定时器；scheduler fake；analytics fake importHistory 即返）
     app.stop();
     assert.equal(calls.close, 1);
     assert.equal(calls.schedulerStop, 1); // report hooks.stop → scheduler.stop
+  });
+
+  it('统计导入守卫（2026-09 修复坑 5）：running 时活跃榜/群统计回「稍后再试」，done 不误触发', async () => {
+    const running = mkApp({}, {
+      analytics: {
+        record: () => {}, countMessages: () => 0,
+        importHistory: async () => {}, importState: 'running',
+        topActive: () => '不应到达', groupStats: () => '不应到达',
+      },
+    });
+    running.send(atEvent('活跃榜'));
+    assert.deepEqual(running.sent.map((s) => s.msg), ['历史消息导入中，请稍后再试']);
+    running.send(atEvent('群统计'));
+    assert.deepEqual(running.sent.map((s) => s.msg), ['历史消息导入中，请稍后再试', '历史消息导入中，请稍后再试']);
+    assert.equal(running.calls.brainChat, null); // 被 stats 消费，不落 chat
+
+    const done = mkApp(); // 默认 fake importState:'done'：守卫放行、正常走聚合查询
+    done.send(atEvent('活跃榜'));
+    done.send(atEvent('群统计'));
+    assert.deepEqual(done.sent.map((s) => s.msg), ['【最近 7 天活跃榜】', '【群消息统计】']);
   });
 });
 

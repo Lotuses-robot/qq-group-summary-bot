@@ -37,7 +37,7 @@ src/            Node ESM；入口 src/index.js（引导 17 行：import { main }
       store.js      消息存储层：JSONL 追加持久化 + state 状态 + 时段提取（含文本工具纯函数）
       summarizer.js LLM 群聊概括器（manual/daily 两套 prompt）
       scheduler.js  每日定时器（单任务 HH:MM，链式 setTimeout，防重入）
-      analytics.js  SQLite 分析层（node:sqlite；消息实时入库 + 抽卡记录 + 活跃榜/统计）
+      analytics.js  SQLite 分析层（node:sqlite；历史 JSONL 后台整库导入 importHistory + 实时镜像 + 抽卡记录 + 活跃榜/统计）
       refresher.js  数据定期更新（ArknightsGameData 下载：ETag 比对 + 结构校验 + 原子写入）
       filter.js     敏感内容过滤（隐私正则 + 敏感词黑名单；纯函数，零 import）
       logger.js     日志（console + 按天轮转文件 logs/YYYY-MM-DD.log，自动清 14 天前）
@@ -78,7 +78,7 @@ P1 起装配与启动拆两层：`createApp(config, overrides)` **纯装配零�
 2. createApp 按依赖序构造（缺省全部实建，overrides 同名键覆盖实例）：
    `MessageStore(dataDir)`（建 data/messages/、data/state/）→ `NapCatClient(wsUrl, {selfId, accessToken})`（此刻不连）→ `Summarizer(llm)` → `Scheduler({dailyHour, dailyMinute})`（时刻取 `report.hour/minute`，缺省 9:00；旧 `schedule.*` 键废弃，见 §8 坑 1）→ `Analytics(dataDir/messages.db, dataDir/messages)`（SQLite 建表）→ `DataRefresher(dataDir/ark, dataRefresh)` → 知识服务上移为共享单例：`LingoStore / ArkDB / KnowledgeCache / WikiRetriever / MoegirlRetriever / WikipediaRetriever` → `ChatBrain({cfg, lingo, arkdb, cache, wiki, moegirl, wikipedia})`（构造注入，替代旧 ChatBot 构造内 new 7 子服务）→ `PluginRegistry` → `createRouting(...)`（P5b：S1–S13 路由判定域工厂，core/routing.js；**先于插件注册**——report 插件依赖其产出的 getAllGroupIds）→ 就地构造插件并 register：commandPlugins（plugins/index.js 静态交付）+ summary/refresh/report/chat/webui 五工厂（依赖本闭包实例与就绪标志，createApp 内 createXxxPlugin(deps)）→ 预载 → `client.onEvent(onEvent)` 挂载路由（判定域挂载点）。
 3. 预载「今天」窗口：`for (gid of config.groups) store.loadFromDisk(gid)`（groups=[] 则什么都不预载；日报/概括按需另载日期段）。
-4. `start()`：注册 `SIGINT/SIGTERM`（stop() → `process.exit(0)`）→ `registry.startAll()`（按 priority 降序调插件 hooks.start，实际执行序：refresh 注册数据自动刷新定时器[§6.3 触发源 a] → report 排下一个每日日报[经 scheduler.start，触发时刻取 report.hour/minute（缺省 9:00）] → webui 按 `webui.enabled !== false` 起面板；旧 start 内 setTimeout/scheduler.start/WebUI 直建段全部迁入插件）→ `client.connect()`。
+4. `start()`：注册 `SIGINT/SIGTERM`（stop() → `process.exit(0)`）→ `registry.startAll()`（按 priority 降序调插件 hooks.start，实际执行序：refresh 注册数据自动刷新定时器[§6.3 触发源 a] → report 排下一个每日日报[经 scheduler.start，触发时刻取 report.hour/minute（缺省 9:00）] → webui 按 `webui.enabled !== false` 起面板；旧 start 内 setTimeout/scheduler.start/WebUI 直建段全部迁入插件）→ `analytics.importHistory()`（2026-09 修复坑 5：历史 JSONL 后台异步导入，状态机 importState idle→running→done，见 data-format.md §3；异步执行不阻塞）→ `client.connect()`。
 5. WS open 后 NapCat 合成 `lifecycle/connect` 事件 → routing S1 段置 `state.ready/wsConnected`（state 为 runtime 与 routing 共享的可变状态对象）→ 回填 selfId（若 0）→ `backfillHistory()`（仅一次）。
 6. `stop()`（信号路径与测试共用）：`registry.stopAll()`（priority 逆序：webui 关面板 → report 停调度 → refresh 清定时器）→ `client.close()`。
 
@@ -191,7 +191,7 @@ filter.js 零 import；plugins 间零互 import（服务一律经 createApp 注�
 2. ~~**wsConnected 永不复位**~~（2026-09 已修复）：WS 断开时 napcat 合成 `lifecycle/disconnect` 事件，routing S1 复位 `wsConnected`——WebUI 状态页如实显示离线；重连后 connect 事件置回 true。断线期间无入站事件，`ready`/`backfillDone` 语义不受影响。
 3. **缓存键跨群共享**：知识缓存 `q:<question>` 不含群号/提问人前缀，同问题在不同群命中同一缓存（含内容已过 TTL 判定）。属既有语义。
 4. **store 同步 IO 在路由热路径**：`addMessage` 同步 `appendFileSync`，写在一切路由判断之前；写失败异常会中断该消息的路由（不入 analytics、不回复）。异步化或加锁会改变现有行为。
-5. **首次消息可能卡顿**：Analytics 的 SQLite 首次写入会同步全量扫描导入 `data/messages/` 下全部 JSONL（`_ensureImported`）。
+5. ~~**首次消息可能卡顿**~~（2026-09 已修复）：Analytics 的 SQLite 首次写入/查询曾同步全量扫描导入 `data/messages/` 下全部 JSONL（`_ensureImported`，首条消息事件可能阻塞数百 ms）。现历史 JSONL 改由 `runtime.start()` 在 `registry.startAll()` 后、`client.connect()` 前异步触发的 `importHistory()` 后台分片导入（状态机 idle/running/done、约每 1000 行一组事务、组间让出事件循环）；`record`/`topActive`/`groupStats`/`countMessages` 均不再触发导入。导入中窗口的可见行为：WebUI 状态行「历史消息导入：进行中…」、活跃榜/群统计指令回「历史消息导入中，请稍后再试」——仅 `importState==='running'` 真实导入时出现，不误触（详见 data-format.md §3）。
 6. **Summarizer 与 ChatBrain 的 LLM 默认值不同**：maxTokens 2048 vs 1024、temperature 0.7 vs 0.8、失败兜底文案仅 chat 有、仅 chat 有并发信号量（3）。LLM 两调用点与 moegirl 的 fetch 原**均无超时/重试**，2026-09 统一改经 core/platform/http.js fetchRetry（LLM 60s×2 次、moegirl 15s×1 次，仅网络错误/超时/5xx 重试，2xx/4xx 原样返回）；wiki/wikipedia 各自的超时/重试/反爬策略不变。
 7. **extractQuestion 只剥 1–2 段前导 @**：`内容 @机器人` 这类尾部/中部 @ 会原样进入问题文本；无空格紧贴 @ 的整串（如文本「@昵称问题…」）会被 `^@[^\s@]{1,30}\s*` 整体吞掉。
 8. **命令未命中也会进 LLM**：任何 @ 且非空文本，若各指令带与刷新/总结关键词都不命中，都会消耗一次 LLM 调用（chatEnabled:false 时不发不耗）。

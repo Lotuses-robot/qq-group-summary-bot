@@ -94,7 +94,8 @@ export function createRouting(options) {
    * 该群有新增才 setLastSeenTs(gid, latest)（只增不减）；单群失败记日志继续。
    *
    * @returns {Promise<void>}
-   * 副作用：写消息存储/状态文件/SQLite（可能触发 analytics 首写全量导入，§8 坑 5）
+   * 副作用：写消息存储/状态文件/SQLite（analytics.record 仅实时镜像单行；历史整库导入
+   * 由 runtime.start() 的 importHistory 后台执行，此处不触发——2026-09 修复坑 5）
    */
   async function backfillHistory() {
     if (!state.ready || state.backfillDone) return;

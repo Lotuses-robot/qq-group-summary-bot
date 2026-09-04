@@ -194,6 +194,8 @@ export function createApp(config, overrides = {}) {
       pools: arkdb.gachaPools.length,
       lingoCount: lingo.size(),
       messages: analytics.countMessages(),
+      // 坑 5 修复：历史 JSONL 后台导入是否进行中（WebUI 据此显示「历史消息导入：进行中…」）
+      importingHistory: analytics.importState === 'running',
       uptime: `${Math.floor((Date.now() - startedAt) / 60000)} 分钟`,
     };
   }
@@ -202,7 +204,8 @@ export function createApp(config, overrides = {}) {
    * 启动（全部启动副作用在此，createApp 本身不碰网络/定时器）：
    * 挂退出信号 → registry.startAll（P3 收尾：refresh 数据自动更新定时器 + report 每日 9:00
    * 调度 + webui 面板按配置起停均经插件 hooks，原 start 内 setTimeout/scheduler.start/WebUI
-   * 直建段已全部迁出）→ client.connect() 建 WS。
+   * 直建段已全部迁出）→ analytics.importHistory() 后台导入历史消息（2026-09 修复坑 5：
+   * 异步分片、不 await，与随后 connect/消息热路径并发不阻塞）→ client.connect() 建 WS。
    * @returns {void}
    */
   function start() {
@@ -220,6 +223,10 @@ export function createApp(config, overrides = {}) {
     // 与旧顺序相同；仅 dataRefresh.enabled !== false 时启用）→ report hooks.start 排下一个
     // 9:00 → webui hooks.start 按 webui.enabled !== false 起面板
     registry.startAll();
+
+    // 历史 JSONL 后台导入（坑 5 修复）：状态机 idle→running→done；analytics 内部已按
+    // 文件/批次容错只记日志，此处 catch 仅兜意外整体异常、不打断后续启动
+    analytics.importHistory().catch((e) => err('历史消息导入失败:', e.message));
 
     // 启动收尾：connect 异步建 WS（置 closed 后不再重连）
     client.connect();

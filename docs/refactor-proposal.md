@@ -94,4 +94,4 @@ test/                 # node:test（无新依赖）：baseline/（行为基线�
 
 - ~~**死配置修复**~~（2026-09 ✅ 已实施）：`schedule.hour/minute` 与 `report.hour` 曾从未生效（Scheduler 只读 `dailyHour/dailyMinute`），日报恒 9:00。已按决策「**report.\* 生效**」落地：runtime 装配处取 `report.hour/minute`（缺省 9/0）构造 Scheduler，`config.schedule` 整块废弃（example 移除该节；README/CLAUDE.md/docs 同步）。
 - ~~**HTTP 超时/重试加固**~~（2026-09 ✅）：Summarizer 与 ChatBrain 的 LLM 调用、moegirl 的 2 个 fetch 原均无超时——现统一经 core/platform/http.js fetchRetry（LLM 60s × 2 次、moegirl 15s × 1 次；仅网络错误/超时/5xx 重试，2xx/4xx 与最后尝试的 5xx 原样返回）。wiki/wikipedia/refresher 各自既有策略不迁。
-- **首次 SQLite 导入同步阻塞**：Analytics 首次写入会同步全量导入 data/messages/ 下 JSONL（architecture §8 坑 5），大库首条消息可能卡顿——异步化/进度展示需立项（engines ≥22.5、wsConnected 复位、死配置修复与 HTTP 加固已修，2026-09 ✅）。
+- ~~**首次 SQLite 导入同步阻塞**~~（2026-09 ✅）：Analytics 首次写入曾同步全量导入 data/messages/ 下 JSONL（architecture §8 坑 5），大库首条消息可能卡顿——已立项实施：`importHistory()` 后台分片异步导入（runtime.start() 触发、状态机 idle/running/done、约每 1000 行一组事务）+ WebUI「历史消息导入：进行中…」状态行 + 活跃榜/群统计导入中回「稍后再试」；record 等热路径不再触发导入（engines ≥22.5、wsConnected 复位、死配置修复与 HTTP 加固已修，2026-09 ✅）。

@@ -1,7 +1,9 @@
 /**
  * P0 行为基线：Analytics SQLite 分析层（src/core/platform/analytics.js）。
  *
- * 锁定目标：_ensureImported 惰性整库导入（坏行跳过、重复行 INSERT OR IGNORE 去重）、
+ * 锁定目标：importHistory 异步整库导入（坏行跳过、重复行 INSERT OR IGNORE 去重、
+ * 状态机 idle/running/done、事务分批、importState 不误触统计守卫——2026-09 修复坑 5，
+ * 原 record/topActive/groupStats 的同步惰性 _ensureImported 已移除）、
  * record 实时镜像、topActive 的窗口与「排除 未知/空名」口径、groupStats 口径、
  * recordPull/myPulls 星级判定（按 ★ 串 LIKE，6★ 不与 5★ 互串）、luckiest 排序、
  * 库文件损坏「构造即抛」（已知行为，重构时不得悄悄改成降级）。
@@ -46,8 +48,8 @@ function recNow(analytics, gid, { userId = 'u1', name = '张三', text = 'hi', a
   return rec;
 }
 
-describe('惰性导入（_ensureImported）', () => {
-  it('首次查询前扫描 messages/ 下全部 JSONL：坏行跳过、重复 id 只入一次', (t) => {
+describe('历史整库导入（importHistory，2026-09 修复坑 5）', () => {
+  it('扫描 messages/ 下全部 JSONL：坏行跳过、重复 id 只入一次；countMessages 不触发导入', async (t) => {
     const dir = makeTmp();
     const gid = '10001';
     const date = localDate(Date.now());
@@ -56,19 +58,83 @@ describe('惰性导入（_ensureImported）', () => {
 
     const analytics = new Analytics(path.join(dir, 'messages.db'), path.join(dir, 'messages'));
     trackDbClose(analytics);
-    // countMessages 不触发导入（文档语义：仅计数），由首次 record 触发
+    assert.equal(analytics.importState, 'idle');
+    assert.equal(analytics.countMessages(), 0); // countMessages 不触发导入（文档语义：仅计数）
+
+    await analytics.importHistory(); // 导入由 runtime.start() 显式触发
+    assert.equal(analytics.importState, 'done');
+    assert.equal(analytics.countMessages(), 2); // a/b 导入；坏行与重复 b 不占行
+
+    // 导入完成后 record 实时直录照常（不重复导入）
     analytics.record(gid, { id: 'c', time: Math.floor(Date.now() / 1000), userId: 'u2', name: '乙', text: '新' });
-    assert.equal(analytics.countMessages(), 3); // a/b 导入 + c 直录；坏行与重复 b 不占行
+    assert.equal(analytics.countMessages(), 3);
   });
 
-  it('导入幂等：同 (群,id) 再 record 不产生第二行', (t) => {
+  it('导入幂等：二次调用不重导（同一 promise），同 (群,id) 后到 record 被 UNIQUE 挡下', async (t) => {
     const dir = makeTmp();
     const gid = '10001';
     const date = localDate(Date.now());
     seedMessages(dir, gid, date, [{ id: 'dup', time: Math.floor(Date.now() / 1000), userId: 'u1', name: '甲', text: 'x' }]);
     const analytics = new Analytics(path.join(dir, 'messages.db'), path.join(dir, 'messages'));
     trackDbClose(analytics);
+    const p1 = analytics.importHistory();
+    const p2 = analytics.importHistory(); // running 中重复调用返回同一 pending promise
+    assert.equal(p2, p1);
+    await p1;
+    await analytics.importHistory(); // done 后调用也不重导
+    assert.equal(analytics.countMessages(), 1);
     analytics.record(gid, { id: 'dup', time: Math.floor(Date.now() / 1000), userId: 'u1', name: '甲', text: 'x' });
+    assert.equal(analytics.countMessages(), 1);
+  });
+
+  it('状态机流转：大批量导入中 importState === running，完成后 done', async (t) => {
+    const dir = makeTmp();
+    const gid = '10001';
+    const date = localDate(Date.now());
+    const now = Math.floor(Date.now() / 1000);
+    // 2500 行单文件：首批 1000 行同步执行后 importHistory() 返回时仍处 'running'
+    seedMessages(dir, gid, date, Array.from({ length: 2500 }, (_, i) => ({ id: `m${i}`, time: now, userId: 'u1', name: '甲', text: `x${i}` })));
+    const analytics = new Analytics(path.join(dir, 'messages.db'), path.join(dir, 'messages'));
+    trackDbClose(analytics);
+
+    const p = analytics.importHistory();
+    assert.equal(analytics.importState, 'running'); // 首批事务落定前同步推进、尚未 done
+    await p;
+    assert.equal(analytics.importState, 'done');
+    assert.equal(analytics.countMessages(), 2500);
+  });
+
+  it('导入与实时 record 交错：事务分批无残留、不产生坏行、总数精确', async (t) => {
+    const dir = makeTmp();
+    const gid = '10001';
+    const date = localDate(Date.now());
+    const now = Math.floor(Date.now() / 1000);
+    seedMessages(dir, gid, date, Array.from({ length: 2500 }, (_, i) => ({ id: `m${i}`, time: now, userId: 'u1', name: '甲', text: `x${i}` })));
+    const analytics = new Analytics(path.join(dir, 'messages.db'), path.join(dir, 'messages'));
+    trackDbClose(analytics);
+
+    const p = analytics.importHistory();
+    // 导入进行中（跨多个批次事务）插一条实时消息：无论落入哪批事务都该最终持久
+    analytics.record(gid, { id: 'live', time: now, userId: 'u2', name: '乙', text: '实时' });
+    await p;
+    assert.equal(analytics.importState, 'done');
+    assert.equal(analytics.countMessages(), 2501);
+
+    // 事务无残留：done 后的 autocommit 直写也正常落库
+    analytics.record(gid, { id: 'live2', time: now, userId: 'u2', name: '乙', text: '实时二' });
+    assert.equal(analytics.countMessages(), 2502);
+  });
+
+  it('非目录条目跳过：messages/ 下混入普通文件不影响群目录导入', async (t) => {
+    const dir = makeTmp();
+    const gid = '10001';
+    const date = localDate(Date.now());
+    seedMessages(dir, gid, date, [{ id: 'a', time: Math.floor(Date.now() / 1000), userId: 'u1', name: '甲', text: '一' }]);
+    fs.writeFileSync(path.join(dir, 'messages', 'notes.txt'), '不是群目录'); // 顶层杂物
+
+    const analytics = new Analytics(path.join(dir, 'messages.db'), path.join(dir, 'messages'));
+    trackDbClose(analytics);
+    await analytics.importHistory();
     assert.equal(analytics.countMessages(), 1);
   });
 });

@@ -46,7 +46,9 @@ data/
 
 `Analytics` 构造时建表（DatabaseSync）：
 
-- `messages`：消息镜像（含 `UNIQUE(group_id, msg_id)`）；**首次**任一查询/写入时 `_ensureImported` 同步全量扫描 messages/ 下 JSONL `INSERT OR IGNORE`（首次消息事件可能阻塞数百 ms）。
+- `messages`：消息镜像（含 `UNIQUE(group_id, msg_id)`）。历史 JSONL 由公开 `importHistory()` 后台整库导入（2026-09 修复坑 5：原 record/topActive/groupStats 首次调用时 `_ensureImported` 同步全量扫描、首条消息事件可能阻塞数百 ms——已移除，record 等热路径不再触发导入）；`INSERT OR IGNORE` 靠 UNIQUE 去重，重跑幂等。
+- 导入状态机 `importState`：`'idle'`（未启动，countMessages 不触发导入，仅计数）→ `'running'` → `'done'`（**finally 恒置位**，含整体异常路径——进程内只跑一轮，重启才重新评估）。`runtime.start()` 在 `registry.startAll()` 后、`client.connect()` 前异步触发 `importHistory()`，不阻塞启动与消息热路径；`'running'`/`'done'` 后重复调用返回同一 promise。导入按 群目录 × 日期文件 × 行 三巡，约每 1000 行一组事务（BEGIN/COMMIT）、组间 `setImmediate` 让出事件循环；坏 JSON 行与单文件读取失败跳过/记日志继续。
+- 导入中窗口的可见行为：WebUI 状态行显示「历史消息导入：进行中…」（`getStatus().importingHistory`）；「活跃榜/群统计」指令回「历史消息导入中，请稍后再试」——**只在 'running' 真实导入时出现**，'idle'/'done' 放行不误触。
 - `pulls`：抽卡记录（`recordPull`：群/人/池/星级/干员/是否UP）；`myPulls` / `luckiest` 查询。
 - 写失败吞掉只记日志；**文件损坏时构造即抛 → 启动崩溃**（countMessages 有 try 返 0）。
 

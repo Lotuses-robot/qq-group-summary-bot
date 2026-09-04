@@ -2,7 +2,8 @@
  * Web 管理面板插件（P3c 由 src/webui.js 迁入并插件化：class WebUI 原样保留 + hooks 包装）。
  *
  * Web 管理面板：零依赖（node:http + 内联 HTML）的本地服务，提供运行状态、本地词典管理、
- * 手动数据刷新与脱敏配置查看；页面为 _html() 返回的内联模板字符串（勿改模板文案/脚本）。
+ * 手动数据刷新与脱敏配置查看；页面为 _html() 返回的内联模板字符串（模板文案/脚本勿动；
+ * 唯一例外：坑 5 特批的 loadStatus「历史消息导入：进行中…」条件状态行，见 _html() 内注释）。
  * start(ctx) 注入契约 4 成员：{ getStatus(): Object, getLingo(): LingoStore, getConfig(): Object,
  * refreshData(): Promise<string> }——由 core/runtime.js 装配期把闭包注入 createWebUiPlugin(deps)。
  *
@@ -242,6 +243,9 @@ async function loadStatus() {
     stat('藏品数', s.relics),
     stat('卡池数', s.pools),
     stat('消息数', s.messages),
+    // 坑 5 特批增行：历史 JSONL 后台导入进行中时提示（importingHistory 来自 getStatus）；
+    // 属模板改动，仅此一处获准（见文件头注释）
+    ...(s.importingHistory ? [stat('历史消息导入', '进行中…')] : []),
     stat('词典数', s.lingoCount),
     stat('运行时长', s.uptime),
   ].join('');
