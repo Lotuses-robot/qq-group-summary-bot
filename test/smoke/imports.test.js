@@ -3,7 +3,7 @@
  *
  * P1（core/ 迁移 + runtime 拆分）后 index.js 已是纯引导文件（main() 只在
  * argv[1] 命中入口时执行），import 无任何启动副作用——因此也纳入 import 冒烟；
- * P5 目录约定：core/{runtime,registry}.js 在 src/core/ 顶层，platform/（服务）与
+ * P5 目录约定：core/{runtime,registry,routing}.js 在 src/core/ 顶层，platform/（服务）与
  * knowledge/（知识单例）分列 src/core/ 两个子目录，plugins/*.js 在 src/plugins/。
  */
 import { describe, it } from 'node:test';
@@ -18,6 +18,7 @@ const srcFile = (name) => path.join(__dirname, '..', '..', 'src', ...name.split(
 const EXPECTED_EXPORTS = {
   'core/runtime.js': ['createApp', 'main'],
   'core/registry.js': ['PluginRegistry', 'PRIORITY'],
+  'core/routing.js': ['createRouting'],
   'core/platform/analytics.js': ['Analytics'],
   'core/platform/filter.js': ['isSensitive', 'sanitizeText', 'filterMessages'],
   'core/platform/logger.js': ['log', 'err'],
