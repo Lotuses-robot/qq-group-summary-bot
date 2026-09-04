@@ -102,7 +102,7 @@ function mkApp(cfgOverrides = {}, svcOverrides = {}) {
       topActive: () => '【最近 7 天活跃榜】', groupStats: () => '【群消息统计】',
     },
     refresher, lingo, arkdb: { snapshotHighOps: () => [], snapshotGachaPools: () => [], reload: () => {} },
-    cache: { get: () => null, set: () => {}, hit: () => {} },
+    cache: { get: () => null, set: () => {}, hit: () => {}, deleteByPrefix: () => 0 },
     wiki: {}, moegirl: {}, wikipedia: {},
     brain,
     ...svcOverrides,

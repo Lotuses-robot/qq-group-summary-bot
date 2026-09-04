@@ -1,5 +1,5 @@
 // 知识缓存模块：内存 Map + JSON 落盘的知识条目缓存（默认 data/knowledge_cache.json），带 TTL 过期剔除与命中计数，服务 AI 回答的知识上下文缓存。
-// 导出：KnowledgeCache（class；对外接口 get/set/hit/size）。
+// 导出：KnowledgeCache（class；对外接口 get/set/hit/deleteByPrefix/size）。
 // 依赖：Node 内置 fs/path/url、../platform/logger.js（log）；唯一实例化点 core/runtime.js（createApp 装配知识共享单例：new KnowledgeCache(llm.cacheFile, { ttlHours: llm.cacheTtlHours ?? 168 })）。
 // 数据：读写 data/knowledge_cache.json（键为规范化查询串，值为 {…内容, cachedAt, hits}）；文件路径与 TTL 来自 config.llm 的 cacheFile / cacheTtlHours（runtime 装配期解析）。
 
@@ -99,6 +99,27 @@ export class KnowledgeCache {
     // 命中只计次数，不刷新 cachedAt，避免热点问题被无限续期
     entry.hits = (entry.hits || 0) + 1;
     return entry.hits;
+  }
+
+  /**
+   * 删除所有以给定前缀开头的缓存条目并落盘（2026-09 修复坑 3：数据刷新实际有更新时，
+   * 经 `deleteByPrefix('q:')` 清掉联网检索缓存，保证下次提问拿到基于新数据的答案；
+   * 前缀与键同做规范化为小写——只删 `q:` 段，`lingo:` 等其他前缀与跨群共享键语义不动）。
+   * @param {string} prefix - 前缀串（内部做同款归一：小写 + 去首尾空白）
+   * @returns {number} 实际删除条数
+   * 副作用：删除数 > 0 时同步全量重写缓存文件
+   */
+  deleteByPrefix(prefix) {
+    const p = this._normalizeKey(prefix);
+    let removed = 0;
+    for (const k of [...this.store.keys()]) {
+      if (k.startsWith(p)) {
+        this.store.delete(k);
+        removed++;
+      }
+    }
+    if (removed > 0) this._save();
+    return removed;
   }
 
   /**

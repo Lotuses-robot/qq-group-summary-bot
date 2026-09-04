@@ -31,7 +31,7 @@ QQ 群聊机器人（NapCat / OneBot 11 / WS），Node ESM，LLM 生成群聊概
 2. **消息入库是同步 `appendFileSync` 且先于一切路由**——不得异步化或加锁（现状：写失败中断该消息路由）。
 3. **@匹配语义**：at 段字符串全等；`@机器人`/`@PRTS` 大小写敏感子串匹配；剥 @ 只剥 1–2 段**前导**的，尾部 @ 原样保留。**关键词/指令判定统一基于剥 @ 后的有效文本**——紧贴 @ 无空格的整串（如 `@PRTS总结`）不触发任何指令/总结、落 S10 空@ 提示（既定语义，勿按旧「含 @ 全文判」回退）。
 4. **日报触发时刻 = `report.hour/minute`**（缺省 9:00；2026-09 立项修复：旧 `schedule.hour/minute` 与 `report.hour` 遗读是死键已废弃，`config.schedule` 整块不再读取）。改键名/触发语义先立项讨论。
-5. **语义保持**：知识缓存键 `q:<问题>` 跨群共享（勿加群号前缀）；Summarizer 与 ChatBrain 的 LLM 默认值（maxTokens 2048/1024、temperature 0.7/0.8）与两套 prompt 文案别单方面改。
+5. **语义保持**：知识缓存键 `q:<问题>` 跨群共享（勿加群号前缀）；2026-09 修复坑 3：数据刷新实际有更新时 `cache.deleteByPrefix('q:')` 清检索缓存（见 plugins/refresh.js），键语义不动；Summarizer 与 ChatBrain 的 LLM 默认值（maxTokens 2048/1024、temperature 0.7/0.8）与两套 prompt 文案别单方面改。
 6. **指令 14 条规则顺序即优先级**：规则按域拆在 4 个指令插件（plugins/lingo.js 词典、ark.js 干员藏品、gacha.js 抽卡、stats.js 统计）——域内序 = 文件内代码序、域间序 = PRIORITY 带（700 > 600 > 500 > 400）。抽卡记录必须先于单抽；负向前瞻正则勿合并。
 7. **抽卡/干员/藏品的概率与过滤逻辑在 core/knowledge/arkdb.js 内**，命令层（插件）只做格式化与落库；概率/可获取性改动需走游戏数据事实，不拍脑袋。
 

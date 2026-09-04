@@ -7,6 +7,8 @@
  * 编排正文：先快照旧 6★/5★ 干员与卡池 id（走 arkdb 公开快照 API）→ refresher.refresh()
  * （依次 干员→档案→藏品→卡池；ETag 304 跳过、结构校验失败抛错）→ 有更新则 arkdb.reload()
  * 热重载并 diff 出新增干员/新开放卡池 → 按 broadcast 组「【数据更新播报】」。
+ * 数据保鲜联动（2026-09 修复坑 3）：updated 非空时同步清掉知识检索缓存（cache.deleteByPrefix
+ * ('q:')）——联网检索结果基于旧数据，刷新后必须失效保证「数据最新」，跨群共享键语义不动。
  * 定时器生命周期：hooks.start 注册（仅 dataRefresh.enabled !== false，首次 firstDelayMinutes
  * 分钟后、此后每 intervalHours 小时——setInterval 由首个 setTimeout 内链式启用，同旧实现）；
  * hooks.stop 清理（旧实现退出路径不清理、依赖 process.exit，插件化后补上，属无害增强）。
@@ -28,6 +30,7 @@ import { PRIORITY } from '../core/registry.js';
  * @param {Object} deps - runtime 装配期注入
  * @param {Object} deps.arkdb - ArkDB 实例（snapshotHighOps/snapshotGachaPools/reload）
  * @param {Object} deps.refresher - DataRefresher 实例（联网刷新 data/ark/）
+ * @param {Object} deps.cache - KnowledgeCache 实例（数据有更新时 deleteByPrefix('q:') 清知识检索缓存）
  * @param {Object} deps.client - NapCatClient 实例（回执/播报群发）
  * @param {Object} deps.store - MessageStore 实例（trackedGroupIds 兜底广播目标）
  * @param {Function} deps.trackedGroups - () => Array，config.groups 访问器（空数组 = 跟踪全部群）
@@ -36,7 +39,7 @@ import { PRIORITY } from '../core/registry.js';
  * @returns {Object} 注册表可直接 register 的插件描述符
  */
 export function createRefreshPlugin(deps) {
-  const { arkdb, refresher, client, store, trackedGroups, broadcast } = deps;
+  const { arkdb, refresher, cache, client, store, trackedGroups, broadcast } = deps;
   const schedule = deps.schedule || {};
   // 定时器句柄（hooks.stop 清理用；旧实现退出不清理、依赖 process.exit，插件化后补上）
   let firstTimer = null;
@@ -47,8 +50,8 @@ export function createRefreshPlugin(deps) {
    * @param {string|null} [notifyGroupId=null] - 群指令触发时传群号：必向该群回执「【数据更新】…」结果消息
    *   （另在 broadcast===true 时附播报）；为 null（定时器/WebUI 触发）时仅当 broadcast 把播报广播给全部跟踪群
    * @returns {Promise<string>} 「【数据更新】…」结果文本（供群回执与 WebUI /api/refresh 复用）
-   * 副作用：联网下载写盘 data/ark/（原子写入+旧文件 .bak 备份）、arkdb 内存热重载、可能群发播报；
-   * 发送失败吞掉只记日志
+   * 副作用：联网下载写盘 data/ark/（原子写入+旧文件 .bak 备份）、arkdb 内存热重载、
+   * 更新时清 q:* 知识检索缓存（坑 3）、可能群发播报；发送失败吞掉只记日志
    */
   async function refresh(notifyGroupId = null) {
     log('[refresh] 开始更新本地数据...');
@@ -63,6 +66,10 @@ export function createRefreshPlugin(deps) {
     if (updated.length > 0) {
       arkdb.reload();
       log('[refresh] 内存数据已重新加载');
+      // 坑 3（2026-09）：数据真有更新才失效知识检索缓存——联网检索结果基于旧数据，
+      // 不清会让同问题命中过期答案；只删 q: 段，词典命中计数等其他键与跨群共享语义不动
+      const cleared = cache.deleteByPrefix('q:');
+      if (cleared > 0) log(`[refresh] 数据已更新，清除 ${cleared} 条知识检索缓存`);
 
       // 对比新增内容
       const new6 = [];

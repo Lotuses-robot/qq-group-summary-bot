@@ -164,7 +164,7 @@ S# 编号保留为行为契约锚点（CLAUDE.md 红线与 refactor-proposal 保
 
 runner = refresh 插件闭包内 `refresh(notifyGroupId)`（经 `api.refresh` 暴露；runtime.refreshData 仅为 app 返回面/WebUI ctx 保持的桥接包装）。触发源：(a) refresh 插件 hooks.start 注册的自动刷新定时器（启动后 `firstDelayMinutes` 30 分钟 → 每 `intervalHours` 24 小时；`dataRefresh.enabled !== false` 才注册）；(b) 群内指令「刷新数据」（分发带 800 带）；(c) WebUI POST `/api/refresh`。
 
-步骤：快照旧 6★/5★ 干员与卡池 id → `refresher.refresh()`（依次 干员表→档案→藏品→卡池；ETag 304 跳过、校验失败抛错）→ 有更新则 `arkdb.reload()` 热重载并 diff 出新增 6★/5★/新开放卡池 → 播报仅当 `dataRefresh.announce === true`；带 `notifyGroupId`（群指令）时**必发**「【数据更新】…」结果消息，否则把新增播报广播给全部跟踪群。发送失败全部吞掉只记日志。
+步骤：快照旧 6★/5★ 干员与卡池 id → `refresher.refresh()`（依次 干员表→档案→藏品→卡池；ETag 304 跳过、校验失败抛错）→ 有更新则 `arkdb.reload()` 热重载、`cache.deleteByPrefix('q:')` 清掉知识检索缓存（2026-09 修复坑 3：联网检索结果基于旧数据，不清则同问题命中过期答案；键语义/跨群共享不动）并 diff 出新增 6★/5★/新开放卡池 → 播报仅当 `dataRefresh.announce === true`；带 `notifyGroupId`（群指令）时**必发**「【数据更新】…」结果消息，否则把新增播报广播给全部跟踪群。发送失败全部吞掉只记日志。
 
 ## 7. 静态依赖图（import 边，箭头 = 被依赖；P5 归类后）
 
@@ -189,7 +189,7 @@ filter.js 零 import；plugins 间零互 import（服务一律经 createApp 注�
 
 1. ~~**死配置（bug）**~~（2026-09 已修复）：`config.schedule.hour/minute` 与 `config.report.hour` 曾**从未生效**——`Scheduler` 解构的是 `dailyHour/dailyMinute` 而装配传的是 `schedule` 对象、`report.hour` 遗读无消费方，日报恒 **9:00**。2026-09 立项决策「`report.*` 生效」：现 runtime 装配处从 `config.report.hour/minute`（缺省 9/0）取值构造 `Scheduler`；`schedule.*` 整块废弃不再读取（example 已移除该节）。
 2. ~~**wsConnected 永不复位**~~（2026-09 已修复）：WS 断开时 napcat 合成 `lifecycle/disconnect` 事件，routing S1 复位 `wsConnected`——WebUI 状态页如实显示离线；重连后 connect 事件置回 true。断线期间无入站事件，`ready`/`backfillDone` 语义不受影响。
-3. **缓存键跨群共享**：知识缓存 `q:<question>` 不含群号/提问人前缀，同问题在不同群命中同一缓存（含内容已过 TTL 判定）。属既有语义。
+3. **缓存键跨群共享**：知识缓存 `q:<question>` 不含群号/提问人前缀，同问题在不同群命中同一缓存（含内容已过 TTL 判定）。属既有语义。数据保鲜（2026-09 修复坑 3）：刷新 runner 在实际有更新时 `cache.deleteByPrefix('q:')` 清掉全部联网检索缓存（键语义与跨群共享**不动**）——保证刷新后同问题不会命中基于旧数据的检索答案，见 §6.3 步骤。
 4. **store 同步 IO 在路由热路径**：`addMessage` 同步 `appendFileSync`，写在一切路由判断之前；写失败异常会中断该消息的路由（不入 analytics、不回复）。异步化或加锁会改变现有行为。
 5. ~~**首次消息可能卡顿**~~（2026-09 已修复）：Analytics 的 SQLite 首次写入/查询曾同步全量扫描导入 `data/messages/` 下全部 JSONL（`_ensureImported`，首条消息事件可能阻塞数百 ms）。现历史 JSONL 改由 `runtime.start()` 在 `registry.startAll()` 后、`client.connect()` 前异步触发的 `importHistory()` 后台分片导入（状态机 idle/running/done、约每 1000 行一组事务、组间让出事件循环）；`record`/`topActive`/`groupStats`/`countMessages` 均不再触发导入。导入中窗口的可见行为：WebUI 状态行「历史消息导入：进行中…」、活跃榜/群统计指令回「历史消息导入中，请稍后再试」——仅 `importState==='running'` 真实导入时出现，不误触（详见 data-format.md §3）。
 6. **Summarizer 与 ChatBrain 的 LLM 默认值不同**：maxTokens 2048 vs 1024、temperature 0.7 vs 0.8、失败兜底文案仅 chat 有、仅 chat 有并发信号量（3）。LLM 两调用点与 moegirl 的 fetch 原**均无超时/重试**，2026-09 统一改经 core/platform/http.js fetchRetry（LLM 60s×2 次、moegirl 15s×1 次，仅网络错误/超时/5xx 重试，2xx/4xx 原样返回）；wiki/wikipedia 各自的超时/重试/反爬策略不变。

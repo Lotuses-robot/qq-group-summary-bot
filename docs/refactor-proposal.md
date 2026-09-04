@@ -45,7 +45,7 @@ test/                 # node:test（无新依赖）：baseline/（行为基线�
 - 静默吞掉全部 @ 行为；手动总结关键词对**剥 @ 后的问题文本** includes 判定（判定基准的旧序差异见下「行为差异与决策」，已定案不回退）。
 - 空 @ → 固定回复「@sender 艾特PRTS干什么呀喵」（core/routing.js，分发前）。
 - chat 恒在分发带末端（原「严格 null 才落 chat」内化，行为不变）；chat 不 await；`setLastSummaryAt` 在发送成功后；抽卡记录在回复前落库；chat 历史只在 LLM 成功后写。
-- cache key `q:<question>` 跨群共享；知识缓存 set 在 LLM 调用前。
+- cache key `q:<question>` 跨群共享；知识缓存 set 在 LLM 调用前（2026-09 坑 3 修复：数据刷新实际有更新时 `cache.deleteByPrefix('q:')` 清掉检索缓存属保真清单的**有意行为变更**——保证后续提问基于新数据，键跨群共享语义不动，动机见 architecture §8 坑 3 与 data-format §4）。
 - refreshData 三触发源共用同一 runner（refresh 插件 api.refresh）；日报口径=昨日自然日、先 loadFromDisk 再 collectRange、不写状态；backfill 仅 connect 时一次、lastSeen 只增不减（2026-09 坑 9 修复：由「全局单值」改为「按群水位」属保真清单的**有意行为变更**，动机与文件形状见 architecture §8 坑 9 与 data-format §2）。
 - Summarizer vs ChatBrain 的 LLM 默认值差异（maxTokens 2048/1024、temperature 0.7/0.8、有无信号量）保持。
 - P5 拆块新增保真项：S1–S13 判定**顺序与文案一字不改**，仅实现位置从 runtime.js 闭包迁到 routing.js 工厂（state 共享对象化，读写点不变）；createApp 导出面与 services 键不变。

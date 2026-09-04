@@ -144,7 +144,7 @@ export function createApp(config, overrides = {}) {
     isReady: () => state.ready,
   });
   const refreshPlugin = createRefreshPlugin({
-    arkdb, refresher, client, store, trackedGroups,
+    arkdb, refresher, cache, client, store, trackedGroups,
     broadcast: config.dataRefresh?.announce === true,
     schedule: config.dataRefresh || {},
   });

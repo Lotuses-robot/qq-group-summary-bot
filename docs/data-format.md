@@ -55,7 +55,7 @@ data/
 ## 4. 词典与缓存（JSON 整文件覆盖写）
 
 - `data/lingo.json` → `{"词条": "释义"}`——`learn`/`delete` 全量重写（2 空格缩进）；构造读取；损坏 → log + 空词典继续。
-- `data/knowledge_cache.json` → `{"<小写key>": {context, sources, hits, cachedAt}}`——`set` 全量重写、`get` 超 TTL 仅内存删不落盘；key 两种：`q:<问题>`（联网检索结果，跨群共享）与 `lingo:<词条>`（命中计数）。
+- `data/knowledge_cache.json` → `{"<小写key>": {context, sources, hits, cachedAt}}`——`set` 全量重写、`get` 超 TTL 仅内存删不落盘、`deleteByPrefix` 按前缀删并落盘；key 两种：`q:<问题>`（联网检索结果，跨群共享）与 `lingo:<词条>`（命中计数）。数据刷新实际有更新时 refresh 插件清空 `q:*` 段（2026-09 修复坑 3：联网检索基于旧数据，刷新后必须失效保证数据最新；只删 `q:` 前缀，`lingo:` 与其他键不受影响）。
 
 ## 5. 方舟数据（data/ark/）
 

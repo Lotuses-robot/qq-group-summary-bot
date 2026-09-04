@@ -4,7 +4,8 @@
  * PluginRegistry 走（priority/短路语义与运行时一致）。
  *
  * 锁定面：summary 关键词命中返回 true 且概括异步执行（含 per-group 互斥、三守卫、ready 静默
- * 消费）；refresh 整串锚定正则与 ack/失败路径、hooks.start 定时器真实触发一次后 hooks.stop
+ * 消费）；refresh 整串锚定正则与 ack/失败路径、updated 非空 → 清一次 q:* 知识缓存（2026-09
+ * 修复坑 3，updated 空不触发）、hooks.start 定时器真实触发一次后 hooks.stop
  * 清理（防残留 interval 挂起进程）；report 无消息面（dispatch 恒 null）、hooks.start 注册的
  * 9:00 回调可驱动完整日报、hooks.stop 停调度。
  */
@@ -95,9 +96,9 @@ describe('summary 插件（手动总结，原 S8）', () => {
 });
 
 describe('refresh 插件（手动刷新 + 自动定时器，原 S11/§6.3）', () => {
-  function mkRefresh({ announce = false, tracked = [], ready = true } = {}) {
+  function mkRefresh({ announce = false, tracked = [], updated = ['干员数据'] } = {}) {
     const sent = [];
-    const calls = { reload: 0, refresh: 0 };
+    const calls = { reload: 0, refresh: 0, clearCache: 0 };
     const store = { trackedGroupIds: () => [] };
     const plugin = createRefreshPlugin({
       arkdb: {
@@ -105,7 +106,8 @@ describe('refresh 插件（手动刷新 + 自动定时器，原 S11/§6.3）', (
         snapshotGachaPools: () => [],
         reload: () => { calls.reload++; },
       },
-      refresher: { refresh: async () => { calls.refresh++; return { updated: ['干员数据'], unchanged: [], failed: [] }; } },
+      refresher: { refresh: async () => { calls.refresh++; return { updated, unchanged: [], failed: [] }; } },
+      cache: { deleteByPrefix: (prefix) => { assert.equal(prefix, 'q:'); calls.clearCache++; return 1; } },
       client: { sendGroupMsg: async (gid, msg) => { sent.push({ gid, msg }); } },
       store,
       trackedGroups: () => tracked,
@@ -129,6 +131,21 @@ describe('refresh 插件（手动刷新 + 自动定时器，原 S11/§6.3）', (
     assert.ok(!sent.some((s) => s.msg.includes('播报'))); // broadcast=false 无播报
   });
 
+  it('数据有更新 → 恰清一次 q:* 知识检索缓存（坑 3：deleteByPrefix 只收 q:）', async () => {
+    const { reg, calls } = mkRefresh();
+    reg.dispatch({ groupId: 1, text: '刷新数据' });
+    await tick(40);
+    assert.equal(calls.clearCache, 1); // updated 非空 → 清缓存恰 1 次（与 reload 同步）
+  });
+
+  it('数据无变化（updated 空）：不热重载也不清缓存（坑 3：失效只在真有更新时）', async () => {
+    const { reg, calls } = mkRefresh({ updated: [] });
+    reg.dispatch({ groupId: 1, text: '刷新数据' });
+    await tick(40);
+    assert.equal(calls.reload, 0);
+    assert.equal(calls.clearCache, 0);
+  });
+
   it('非整串（前缀/近似词）不命中：刷新数据库、帮我刷新数据 → null', () => {
     const { reg } = mkRefresh();
     assert.equal(reg.dispatch({ groupId: 1, text: '刷新数据库' }), null);
@@ -140,6 +157,7 @@ describe('refresh 插件（手动刷新 + 自动定时器，原 S11/§6.3）', (
     const sent = [];
     // 快照随 reload 演化：reload 前无干员、reload 后出现新 6★ → 自动更新播报才有内容
     let loaded = false;
+    let cleared = 0;
     const plugin = createRefreshPlugin({
       arkdb: {
         snapshotHighOps: () => (loaded ? [{ id: 'op1', name: '新干员', rarity: 'TIER_6' }] : []),
@@ -147,6 +165,7 @@ describe('refresh 插件（手动刷新 + 自动定时器，原 S11/§6.3）', (
         reload: () => { loaded = true; },
       },
       refresher: { refresh: async () => ({ updated: ['干员数据'], unchanged: [], failed: [] }) },
+      cache: { deleteByPrefix: () => { cleared++; return 1; } }, // 坑 3：自动更新同样清 q:* 缓存
       client: { sendGroupMsg: async (gid, msg) => sent.push({ gid, msg }) },
       store: { trackedGroupIds: () => [] },
       trackedGroups: () => [111, 222],
@@ -161,6 +180,7 @@ describe('refresh 插件（手动刷新 + 自动定时器，原 S11/§6.3）', (
     assert.equal(sent.length, 2, `自动更新应广播到两个跟踪群，实收 ${sent.length}`);
     assert.ok(sent.every((s) => [111, 222].includes(s.gid)));
     assert.ok(sent.some((s) => s.msg.includes('新增 6★ 干员：新干员')));
+    assert.equal(cleared, 1); // 自动刷新 updated 非空 → 清缓存一次
     plugin.hooks.stop(); // 清掉 repeat interval（24h），防残留定时器挂起进程
   });
 });
