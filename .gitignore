@@ -7,3 +7,4 @@ config.json
 start_bot.bat
 bot.log
 bot.err.log
+*.exe

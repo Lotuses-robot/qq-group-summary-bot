@@ -35,7 +35,8 @@ export class Analytics {
     this.messagesDir = messagesDir;
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
     this.db = new DatabaseSync(dbPath);
-    this.db.exec(`
+    try {
+      this.db.exec(`
       CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         group_id TEXT NOT NULL,
@@ -61,6 +62,13 @@ export class Analytics {
       );
       CREATE INDEX IF NOT EXISTS idx_pulls_group_user ON pulls(group_id, user_id);
     `);
+    } catch (err) {
+      // 建表失败（典型：库文件损坏）时先关掉已打开的句柄再抛——「构造即抛」的对外
+      // 行为不变，但避免 Windows 上残留句柄占住 dbPath 文件（node:sqlite 句柄
+      // 不会随引用丢失自动释放，只能显式 close 或等进程退出）
+      try { this.db.close(); } catch { /* 忽略 */ }
+      throw err;
+    }
     this._imported = false;
   }
 

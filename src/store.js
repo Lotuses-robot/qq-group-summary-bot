@@ -266,7 +266,8 @@ export class MessageStore {
 
   /**
    * 落一条实时群消息（OneBot group_message 事件）→ 归一为记录 → 内存 + JSONL 追加。
-   * 无文本（纯图片/表情等）或该 (群, 消息id) 已写盘过则返回 null，且不落任何文件。
+   * 图片/表情等段会以 [图片] 等占位符形态正常入库；仅当归一文本为空串
+   * （空消息段数组且无 raw_message）或该 (群, 消息id) 已写盘过时返回 null，且不落任何文件。
    * @param {Object} event - OneBot 群消息事件；用到的字段：group_id、message_id、user_id、
    *   time（缺省取当前秒）、message（段数组）、raw_message、sender.card/nickname
    * @returns {Object|null} 新记录 {id, time, userId, name, card, text}；
