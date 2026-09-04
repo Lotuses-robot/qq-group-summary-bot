@@ -31,7 +31,7 @@ QQ 群聊机器人（NapCat / OneBot 11 / WS），Node ESM，LLM 生成群聊概
 2. **消息入库是同步 `appendFileSync` 且先于一切路由**——不得异步化或加锁（现状：写失败中断该消息路由）。
 3. **@匹配语义**：at 段字符串全等；`@机器人`/`@PRTS` 大小写敏感子串匹配；剥 @ 只剥 1–2 段**前导**的，尾部 @ 原样保留。**关键词/指令判定统一基于剥 @ 后的有效文本**——紧贴 @ 无空格的整串（如 `@PRTS总结`）不触发任何指令/总结、落 S10 空@ 提示（既定语义，勿按旧「含 @ 全文判」回退）。
 4. **日报触发时刻 = `report.hour/minute`**（缺省 9:00；2026-09 立项修复：旧 `schedule.hour/minute` 与 `report.hour` 遗读是死键已废弃，`config.schedule` 整块不再读取）。改键名/触发语义先立项讨论。
-5. **语义保持**：知识缓存键 `q:<问题>` 跨群共享（勿加群号前缀）；Summarizer 与 ChatBrain 的 LLM 默认值（maxTokens 2048/1024、temperature 0.7/0.8）与两套 prompt 文案别单方面改（LLM/moegirl HTTP 无超时/重试的加固已立项，落地前勿动调用点）。
+5. **语义保持**：知识缓存键 `q:<问题>` 跨群共享（勿加群号前缀）；Summarizer 与 ChatBrain 的 LLM 默认值（maxTokens 2048/1024、temperature 0.7/0.8）与两套 prompt 文案别单方面改。
 6. **指令 14 条规则顺序即优先级**：规则按域拆在 4 个指令插件（plugins/lingo.js 词典、ark.js 干员藏品、gacha.js 抽卡、stats.js 统计）——域内序 = 文件内代码序、域间序 = PRIORITY 带（700 > 600 > 500 > 400）。抽卡记录必须先于单抽；负向前瞻正则勿合并。
 7. **抽卡/干员/藏品的概率与过滤逻辑在 core/knowledge/arkdb.js 内**，命令层（插件）只做格式化与落库；概率/可获取性改动需走游戏数据事实，不拍脑袋。
 
@@ -48,7 +48,7 @@ QQ 群聊机器人（NapCat / OneBot 11 / WS），Node ESM，LLM 生成群聊概
 ## 结构方向（重要）
 
 重构（P0–P3，2026-09 落地，方案存档见 [docs/refactor-proposal.md](docs/refactor-proposal.md)）已完成，P5 再对 core 子目录归类并把 S 链判定拆到 core/routing.js：**core 主运行库 + PluginRegistry + plugins**。
-- core/ 顶层 = 装配与判定三件：runtime.js（createApp 唯一装配者 + 生命周期 + main）、registry.js（分发带）、routing.js（S1–S7/S9/S10 判定链 + backfill，P5 自 runtime.js 拆出）；core/platform/ = 平台服务与基础设施（napcat/store/summarizer/scheduler/analytics/refresher/filter/logger）；core/knowledge/ = 知识单例（lingo/arkdb/cache/wiki/moegirl/wikipedia）。
+- core/ 顶层 = 装配与判定三件：runtime.js（createApp 唯一装配者 + 生命周期 + main）、registry.js（分发带）、routing.js（S1–S7/S9/S10 判定链 + backfill，P5 自 runtime.js 拆出）；core/platform/ = 平台服务与基础设施（napcat/store/summarizer/scheduler/analytics/refresher/filter/logger/http）；core/knowledge/ = 知识单例（lingo/arkdb/cache/wiki/moegirl/wikipedia）。
 - plugins/ = 9 个插件：4 指令（lingo/ark/gacha/stats）+ summary/refresh/report（后台流程）+ chat（LLM 兜底）+ webui（面板）；插件间零互 import，服务一律经 createApp 注入。
 
 约束：
@@ -56,7 +56,7 @@ QQ 群聊机器人（NapCat / OneBot 11 / WS），Node ESM，LLM 生成群聊概
 - 不要在无讨论的情况下启动大规模结构改动（core/plugins 边界的移动会牵动注入面与测试）；
 - 新增功能时**不必**为未来抽象提前设计——指令/后台流程按当前惯例写进对应插件与装配段即可；
 - 若你发现"为加一个小功能必须动 runtime 路由链 + registry 分发语义"，先对照 refactor-proposal 剩余待办讨论，而不是临时发明第二套注册机制；
-- 独立待办（LLM/moegirl 网络调用无超时/重试的加固）已立项、按序落地中——对应 commit 完成前别顺手改其他调用点，见 refactor-proposal「待办」。
+- 独立待办（Analytics 首次 SQLite 导入同步阻塞，architecture §8 坑 5）尚未立项，别顺手修——见 refactor-proposal「待办」。
 
 ## 仓库约定
 

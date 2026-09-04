@@ -32,7 +32,7 @@ src/            Node ESM；入口 src/index.js（引导 17 行：import { main }
                  getAllGroupIds, backfillHistory}——S1–S7/S9/S10 判定链 + 离线补偿 +
                  群枚举（P5 自 runtime.js 逐字拆出）；服务全经 options 注入，仅静态
                  import platform/ 的 logger/store
-    platform/    平台与公共服务（P5 归类，8 文件）
+    platform/    平台与公共服务（P5 归类，9 文件）
       napcat.js     OneBot 11 正向 WS 客户端（连接/重连/echo 请求-响应/事件回调）
       store.js      消息存储层：JSONL 追加持久化 + state 状态 + 时段提取（含文本工具纯函数）
       summarizer.js LLM 群聊概括器（manual/daily 两套 prompt）
@@ -41,7 +41,8 @@ src/            Node ESM；入口 src/index.js（引导 17 行：import { main }
       refresher.js  数据定期更新（ArknightsGameData 下载：ETag 比对 + 结构校验 + 原子写入）
       filter.js     敏感内容过滤（隐私正则 + 敏感词黑名单；纯函数，零 import）
       logger.js     日志（console + 按天轮转文件 logs/YYYY-MM-DD.log，自动清 14 天前）
-    knowledge/   知识单例（P5 归类，6 文件；对 platform/ 只依赖 logger）
+      http.js       fetch 包装：单次尝试超时 + 网络错误/超时/5xx 重试（fetchRetry；2026-09 起 summarizer/chat/moegirl 调用点共用）
+    knowledge/   知识单例（P5 归类，6 文件；对 platform/ 只依赖 logger 与 http）
       lingo.js      本地梗词典（可维护；命中即用，优先级最高的知识源）
       arkdb.js      本地方舟数据库（干员/档案/藏品/卡池 + 语义模糊匹配 + 抽卡引擎）
       cache.js      知识缓存（同问题二次提问直接命中，TTL 168h）
@@ -67,7 +68,7 @@ logs/           日志
 config.example.json / config.json   配置模板（脱敏）与实配（含密钥）
 ```
 
-模块行数规模（2026-09，P5 落地后实测，含注释/空行）：src/ 合计约 5.0k 行——core/ ≈3.4k（runtime.js 269 行装配叙事、routing.js 225 行路由判定域、registry.js 137、platform/ 1.4k、knowledge/ 1.4k）、plugins/ ≈1.6k。
+模块行数规模（2026-09，P5 落地后实测，含注释/空行）：src/ 合计约 5.1k 行——core/ ≈3.5k（runtime.js 269 行装配叙事、routing.js 225 行路由判定域、registry.js 137、platform/ 1.5k、knowledge/ 1.4k）、plugins/ ≈1.6k。
 
 ## 3. 启动装配顺序（createApp 纯装配 → start() 副作用）
 
@@ -177,7 +178,7 @@ routing（core 顶层）← platform 组 logger/store（静态，fmtFull/log）+
         options 注入（零插件工厂 import；S12 经注入的 registry 分发）
 runtime（core 顶层）← platform/knowledge/registry/routing 全部 + plugins 全部工厂（唯一装配者）
         ——core 对 plugins 的唯一反向依赖：runtime 装配期 import 各 createXxxPlugin
-platform/ 与 knowledge/ 组间：knowledge → platform 仅 logger 一条（../platform/logger.js），无反向
+platform/ 与 knowledge/ 组间：knowledge → platform 仅两条——logger（../platform/logger.js）与 http（moegirl 调 fetchRetry，../platform/http.js），无反向
 filter.js 零 import；plugins 间零互 import（服务一律经 createApp 注入/ctx 注入）
 ```
 
@@ -190,7 +191,7 @@ filter.js 零 import；plugins 间零互 import（服务一律经 createApp 注�
 3. **缓存键跨群共享**：知识缓存 `q:<question>` 不含群号/提问人前缀，同问题在不同群命中同一缓存（含内容已过 TTL 判定）。属既有语义。
 4. **store 同步 IO 在路由热路径**：`addMessage` 同步 `appendFileSync`，写在一切路由判断之前；写失败异常会中断该消息的路由（不入 analytics、不回复）。异步化或加锁会改变现有行为。
 5. **首次消息可能卡顿**：Analytics 的 SQLite 首次写入会同步全量扫描导入 `data/messages/` 下全部 JSONL（`_ensureImported`）。
-6. **Summarizer 与 ChatBrain 的 LLM 默认值不同**：maxTokens 2048 vs 1024、temperature 0.7 vs 0.8、失败兜底文案仅 chat 有、仅 chat 有并发信号量（3）——两处都是独立 fetch、**都无 HTTP 超时/重试**；moegirl 的 fetch 也无超时（wiki/wikipedia 有）。
+6. **Summarizer 与 ChatBrain 的 LLM 默认值不同**：maxTokens 2048 vs 1024、temperature 0.7 vs 0.8、失败兜底文案仅 chat 有、仅 chat 有并发信号量（3）。LLM 两调用点与 moegirl 的 fetch 原**均无超时/重试**，2026-09 统一改经 core/platform/http.js fetchRetry（LLM 60s×2 次、moegirl 15s×1 次，仅网络错误/超时/5xx 重试，2xx/4xx 原样返回）；wiki/wikipedia 各自的超时/重试/反爬策略不变。
 7. **extractQuestion 只剥 1–2 段前导 @**：`内容 @机器人` 这类尾部/中部 @ 会原样进入问题文本；无空格紧贴 @ 的整串（如文本「@昵称问题…」）会被 `^@[^\s@]{1,30}\s*` 整体吞掉。
 8. **命令未命中也会进 LLM**：任何 @ 且非空文本，若各指令带与刷新/总结关键词都不命中，都会消耗一次 LLM 调用（chatEnabled:false 时不发不耗）。
 9. **lastSeenTs 是全局单值**（非按群），backfill 的起点由任一群的最后消息推进。

@@ -25,7 +25,7 @@
 | [config-reference.md](config-reference.md) | `config.json` 全部配置键：类型/默认值/消费模块/备注 | 部署者、功能开发 |
 | [data-format.md](data-format.md) | `data/` 下全部数据文件：布局、行/记录格式、读写方、损坏容错 | 维护者、迁移 |
 | [external-apis.md](external-apis.md) | 对外接口面：OneBot 11 WS 使用面、LLM `/chat/completions` 调用形状（两调用点差异）、三个 Wiki API 的检索与限流、ArknightsGameData 下载与校验 | 调试联调 |
-| [refactor-proposal.md](refactor-proposal.md) | **重构决策存档**：「core 主运行库 + 插件注册 + 插件」目标架构与行为保真清单、P0–P4 迁移记录（**P0–P3 已实施**）；仍在待办：LLM/moegirl 网络调用加固等独立立项项 | 结构改动前必读 |
+| [refactor-proposal.md](refactor-proposal.md) | **重构决策存档**：「core 主运行库 + 插件注册 + 插件」目标架构与行为保真清单、P0–P4 迁移记录（**P0–P3 已实施**）；仍在待办：首次 SQLite 导入同步阻塞等独立立项项 | 结构改动前必读 |
 
 ## 源码注释规范（house style）
 

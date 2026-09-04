@@ -42,7 +42,7 @@ src/
     registry.js   插件注册表（按优先级带分发消息 / hooks 起停插件）
     routing.js    S1–S13 消息路由判定链 + 离线补偿（P5 自 runtime.js 拆出，装配期挂载）
     platform/     napcat.js / store.js / summarizer.js / scheduler.js / analytics.js / refresher.js
-                  filter.js / logger.js
+                  filter.js / logger.js / http.js
     knowledge/    lingo.js / arkdb.js / cache.js / wiki.js / moegirl.js / wikipedia.js   知识服务共享单例
   plugins/      功能插件（互不 import；服务一律经 createApp 注入）
     lingo.js / ark.js / gacha.js / stats.js   确定性指令（原 commands.js 按领域拆）

@@ -21,6 +21,7 @@ const EXPECTED_EXPORTS = {
   'core/routing.js': ['createRouting'],
   'core/platform/analytics.js': ['Analytics'],
   'core/platform/filter.js': ['isSensitive', 'sanitizeText', 'filterMessages'],
+  'core/platform/http.js': ['fetchRetry'],
   'core/platform/logger.js': ['log', 'err'],
   'core/platform/napcat.js': ['NapCatClient'],
   'core/platform/refresher.js': ['DataRefresher'],

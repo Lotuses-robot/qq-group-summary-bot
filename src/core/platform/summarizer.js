@@ -4,7 +4,8 @@
  * 职责：把一组消息记录拼成结构化中文 prompt，调用 OpenAI 兼容
  * {llm.baseUrl}/chat/completions 生成 markdown 群聊概括或「昨日日报」。
  * 请求形状、prompt 约束与两调用点的差异详见 docs/external-apis.md §2——
- * 无 HTTP 超时/重试，失败一律抛错冒泡，由调用方（summary/report 插件）兜底。
+ * 调用经 core/platform/http.js fetchRetry（60s 超时、2 次重试），失败一律抛错冒泡，
+ * 由调用方（summary/report 插件）兜底。
  *
  * 对外导出：类 Summarizer，仅由 core/runtime.js 的 createApp 装配一次（构造入参是
  * config.json 的 llm 节）；summarize 被 plugins/summary.js 的 doSummary（手动概括，
@@ -12,6 +13,7 @@
  */
 import { hhmm } from './store.js';
 import { log } from './logger.js';
+import { fetchRetry } from './http.js';
 
 /**
  * LLM 概括器：消息记录列表 → 结构化 prompt → /chat/completions → markdown 概括文本。
@@ -48,7 +50,7 @@ export class Summarizer {
    * @returns {Promise<string|null>} 概括 markdown 文本；recs 为空返回 null
    * @throws LLM 返回非 2xx 时抛「LLM API 错误 <status>: <body 前 500 字>」；
    *   2xx 但响应缺 content 时抛「LLM 返回内容为空」
-   * 副作用: 调用一次 LLM HTTP 接口（无超时、无重试，见 external-apis.md §2）
+   * 副作用: 调用一次 LLM HTTP 接口（60s 超时、最多 2 次重试，见 external-apis.md §2 与 http.js）
    */
   async summarize(groupId, recs, spanText, purpose = 'manual') {
     if (!recs.length) return null;
@@ -86,7 +88,7 @@ export class Summarizer {
 
     log(`[summarizer] 正在调用 ${this.model} 概括群 ${groupId}...`);
 
-    const resp = await fetch(`${this.baseUrl}/chat/completions`, {
+    const resp = await fetchRetry(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -101,7 +103,7 @@ export class Summarizer {
         temperature: 0.7,
         max_tokens: this.maxTokens,
       }),
-    });
+    }, { timeoutMs: 60000, retries: 2, retryDelayMs: 2000 });
 
     if (!resp.ok) {
       const text = await resp.text();

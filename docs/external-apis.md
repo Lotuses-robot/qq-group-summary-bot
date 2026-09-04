@@ -22,7 +22,7 @@
 
 ## 2. LLM（OpenAI 兼容 /chat/completions）
 
-两个调用点（Summarizer 与 ChatBrain 各自独立 fetch，**都无 HTTP 超时/重试**）：
+两个调用点各自独立发请求，统一经 core/platform/http.js 的 `fetchRetry` 包装（2026-09 加固，原无超时/重试）：每次尝试 60s 超时、最多重试 2 次——仅**网络错误/超时/HTTP 5xx** 触发重试（5xx 只在非最后尝试时重试，最后一次原样返回供提取 body），2xx/4xx 一律原样返回响应：
 
 ```
 POST {llm.baseUrl}/chat/completions
@@ -36,6 +36,7 @@ Authorization: Bearer {apiKey}
 | temperature | 0.7 | 0.8 |
 | max_tokens 默认 | 2048 | 1024 |
 | 并发限制 | 无 | 信号量 3（llm.chatConcurrency） |
+| 超时/重试 | 60s/次 × 2 次重试（fetchRetry） | 同左 |
 | 失败兜底 | 抛错冒泡（调用方处理） | 返回 `defaultReply` 文案（照发） |
 | 成功副作用 | 无 | 追加群上下文历史（失败不写） |
 | 响应取值 | `choices[0].message.content.trim()`；空则抛错 | 同左 |
@@ -51,7 +52,7 @@ Authorization: Bearer {apiKey}
 | search | MediaWiki API（12s 超时、1.5s×3 重试、**HTML 反爬探测→10s 冷却**） | OpenSearch API | API search |
 | 取页 | wikitext + 白名单清洗（去 ref/标签，保关键参数行） | **浏览器 UA 抓 HTML** + mw-parser-output 容器正则 | 段落 extract 纯文本 |
 | 截断 | `wikiMaxCharPerPage`(4000) | `moegirlMaxCharPerPage`(5000) | 2000 |
-| 超时 | 12s/请求（AbortSignal） | **无超时**（仅节流） | 10s/请求 |
+| 超时 | 12s/请求（AbortSignal） | 15s/请求 × 1 次重试（fetchRetry） | 10s/请求 |
 | 话题门 | 仅方舟相关问题（`isArknightsRelated` 词表+关卡正则）才检索 | 无条件检索（萌娘命中方舟梗兜底 17 个主词条页） | 仅**非**方舟问题且 `enabled===true`（需代理） |
 | 并入上下文 | topK=3 | topK=2 | topK=2 |
 

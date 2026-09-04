@@ -6,10 +6,12 @@
  * extractKeywords 做关键词清洗。类由 core/runtime.js 装配为知识共享单例
  * （三个 Wiki 检索器同此，注入 ChatBrain）；启用/节流等 moegirl 系配置键经构造参数注入。
  * 读写数据：无本地读写；抓取 zh.moegirl.org.cn 网页（浏览器 UA 防反爬 + 正文容器
- * 正则提取），仅 1.5s 最小间隔节流——fetch 无超时（见 architecture.md §8 坑 6）。
+ * 正则提取），请求经 core/platform/http.js fetchRetry（15s 超时、1 次重试）并带
+ * 1.5s 最小间隔节流（见 architecture.md §8 坑 6）。
  */
 import { log } from '../platform/logger.js';
 import { extractKeywords } from './wiki.js';
+import { fetchRetry } from '../platform/http.js';
 
 const API_URL = 'https://zh.moegirl.org.cn/api.php';
 const SITE_URL = 'https://zh.moegirl.org.cn';
@@ -49,7 +51,7 @@ export class MoegirlRetriever {
    * @param {boolean} [cfg.moegirlEnabled=true] - 是否启用本检索器
    * @param {number} [cfg.moegirlMaxCharPerPage=5000] - 单页正文并入上限字符
    * @param {number} [cfg.moegirlTopK=2] - 并入 context 的页数上限
-   * @param {number} [cfg.moegirlMinInterval=1500] - 相邻请求最小间隔 ms（无超时，仅靠它限流）
+   * @param {number} [cfg.moegirlMinInterval=1500] - 相邻请求最小间隔 ms（限流用；超时/重试见 http.js fetchRetry）
    */
   constructor(cfg = {}) {
     this.enabled = cfg.moegirlEnabled !== false;
@@ -78,7 +80,7 @@ export class MoegirlRetriever {
   async searchOpensearch(keyword, limit = 5) {
     const url = `${API_URL}?action=opensearch&search=${encodeURIComponent(keyword)}&format=json&limit=${limit}`;
     await this._wait();
-    const resp = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json' } });
+    const resp = await fetchRetry(url, { headers: { 'User-Agent': UA, Accept: 'application/json' } }, { timeoutMs: 15000, retries: 1 });
     const data = await resp.json();
     // opensearch 返回 [query, titles[], desc[], urls[]]
     return (data?.[1] || []).map((title, i) => ({ title, url: data?.[3]?.[i] }));
@@ -111,7 +113,7 @@ export class MoegirlRetriever {
   async getPageHtml(title) {
     await this._wait();
     const url = `${SITE_URL}/${encodeURIComponent(title)}`;
-    const resp = await fetch(url, { headers: { 'User-Agent': BROWSER_UA, Accept: 'text/html' } });
+    const resp = await fetchRetry(url, { headers: { 'User-Agent': BROWSER_UA, Accept: 'text/html' } }, { timeoutMs: 15000, retries: 1 });
     if (!resp.ok) throw new Error(`Moegirl ${resp.status}`);
     return resp.text();
   }

@@ -22,6 +22,7 @@
 import { log, err } from '../core/platform/logger.js';
 import { isArknightsRelated, extractKeywords } from '../core/knowledge/wiki.js';
 import { PRIORITY } from '../core/registry.js';
+import { fetchRetry } from '../core/platform/http.js';
 
 // 来源可信度权重（分数越高越可信）
 const SOURCE_TRUST = {
@@ -382,7 +383,8 @@ export class ChatBrain {
 
   /**
    * LLM 调用统一出口（chat 内所有快路与兜底共用）：信号量内 POST {baseUrl}/chat/completions
-   * （temperature 0.8、max_tokens=maxTokens；请求无 HTTP 超时/重试，见 external-apis §2——此处不修）。
+   * （temperature 0.8、max_tokens=maxTokens；请求经 fetchRetry：60s 超时、最多 2 次重试，
+   * 见 external-apis §2 与 core/platform/http.js）。
    * 成功 → 追加 user+assistant 两条群历史后返回 content；失败（HTTP 非 2xx / 空内容）→
    * 返回 defaultReply 兜底文案且不写历史（避免失败重试累积重复上下文）。
    *
@@ -400,7 +402,7 @@ export class ChatBrain {
 
     try {
       const reply = await this.semaphore.run(async () => {
-        const resp = await fetch(`${this.baseUrl}/chat/completions`, {
+        const resp = await fetchRetry(`${this.baseUrl}/chat/completions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -412,7 +414,7 @@ export class ChatBrain {
             temperature: 0.8,
             max_tokens: this.maxTokens,
           }),
-        });
+        }, { timeoutMs: 60000, retries: 2, retryDelayMs: 2000 });
 
         if (!resp.ok) {
           const text = await resp.text();

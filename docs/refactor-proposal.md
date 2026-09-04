@@ -23,7 +23,7 @@ src/
     routing.js        # 【P5 新增】createRouting(options) 工厂：S1–S7/S9/S10 判定链 + backfillHistory +
                       # getAllGroupIds（自 runtime.js 逐字拆出，文本零改动；服务全经 options 注入）
     platform/         # 平台与公共服务（P5 归类）：napcat.js store.js summarizer.js scheduler.js
-                      # analytics.js refresher.js filter.js logger.js
+                      # analytics.js refresher.js filter.js logger.js http.js
     knowledge/        # 知识单例（P5 归类）：lingo.js arkdb.js cache.js wiki.js moegirl.js wikipedia.js
   plugins/            # 功能插件（扁平文件式；互不 import）
     index.js          # commandPlugins 装配清单
@@ -93,4 +93,5 @@ test/                 # node:test（无新依赖）：baseline/（行为基线�
 ## 待办（与重构无强耦合，可独立立项；P4 收尾后仍开放）
 
 - ~~**死配置修复**~~（2026-09 ✅ 已实施）：`schedule.hour/minute` 与 `report.hour` 曾从未生效（Scheduler 只读 `dailyHour/dailyMinute`），日报恒 9:00。已按决策「**report.\* 生效**」落地：runtime 装配处取 `report.hour/minute`（缺省 9/0）构造 Scheduler，`config.schedule` 整块废弃（example 移除该节；README/CLAUDE.md/docs 同步）。
-- **加固**：Summarizer 与 ChatBrain 的 LLM 调用、moegirl fetch 均无 HTTP 超时/重试；首次 SQLite 导入同步阻塞（engines ≥22.5、wsConnected 复位与死配置修复已修，2026-09 ✅）。
+- ~~**HTTP 超时/重试加固**~~（2026-09 ✅）：Summarizer 与 ChatBrain 的 LLM 调用、moegirl 的 2 个 fetch 原均无超时——现统一经 core/platform/http.js fetchRetry（LLM 60s × 2 次、moegirl 15s × 1 次；仅网络错误/超时/5xx 重试，2xx/4xx 与最后尝试的 5xx 原样返回）。wiki/wikipedia/refresher 各自既有策略不迁。
+- **首次 SQLite 导入同步阻塞**：Analytics 首次写入会同步全量导入 data/messages/ 下 JSONL（architecture §8 坑 5），大库首条消息可能卡顿——异步化/进度展示需立项（engines ≥22.5、wsConnected 复位、死配置修复与 HTTP 加固已修，2026-09 ✅）。
