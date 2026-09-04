@@ -1,7 +1,28 @@
+/**
+ * 消息持久化层与文本工具。
+ *
+ * 职责：把 OneBot 实时群消息事件与 backfill 拉回的历史消息统一归一成纯文本记录，
+ * 追加写入 data/messages/<群号>/<YYYY-MM-DD>.jsonl，并按群缓存在内存
+ * （messages/users/lastSummaryAt）；另维护两份状态文件：data/state/<群号>.json
+ * （每群最后概括时间）与 data/state/lastSeen.json（全局 lastSeenTs，backfill 起点）。
+ * 文件布局与行格式详见 docs/data-format.md §1-2。
+ *
+ * 对外导出：纯函数 segmentToText / extractText / localDate / hhmm / fmtFull，
+ * 以及类 MessageStore（仅在 src/index.js 被 new 一次，进程级单实例共享）。
+ * 时间戳单位约定：消息记录统一用「秒」；纯函数里 localDate 的入参是毫秒，
+ * hhmm 的入参是秒（与消息 time 字段一致），勿混用。
+ */
 import fs from 'node:fs';
 import path from 'node:path';
 import { log } from './logger.js';
 
+/**
+ * 单个 OneBot 消息段（{type, data}）→ 展示用纯文本。
+ * 图片/语音等不可文本化的类型返回固定的中括号占位符（[图片] 等），保证落盘与
+ * 喂给 LLM 的永远是纯文本形态；未知类型优先取 data.text，取不到回退 [<type>]。
+ * @param {Object} seg - CQ 消息段；非对象或为空返回 ''
+ * @returns {string} 纯文本或占位符串
+ */
 export function segmentToText(seg) {
   if (!seg || typeof seg !== 'object') return '';
   const d = seg.data || {};
@@ -23,12 +44,24 @@ export function segmentToText(seg) {
   }
 }
 
+/**
+ * 把一条消息归一成纯文本：字符串原样返回；段数组逐段 segmentToText 拼接后 trim。
+ * addMessage / addHistoryMessage 落盘前都先经此归一。
+ * @param {string|Object[]} message - 纯文本，或 OneBot message 段数组
+ * @returns {string} 归一化纯文本（纯图片/表情消息可能为 ''）
+ */
 export function extractText(message) {
   if (typeof message === 'string') return message;
   if (!Array.isArray(message)) return '';
   return message.map(segmentToText).join('').trim();
 }
 
+/**
+ * 毫秒时间戳 → 本地时区日期串 "YYYY-MM-DD"，即 JSONL 按天分片的文件名日期，
+ * 也是 loadFromDisk 翻文件的日期游标单位。注意入参单位是毫秒。
+ * @param {number} tsMs - 毫秒级时间戳
+ * @returns {string} 形如 "2024-01-05"
+ */
 export function localDate(tsMs) {
   const d = new Date(tsMs);
   const y = d.getFullYear();
@@ -37,33 +70,65 @@ export function localDate(tsMs) {
   return `${y}-${m}-${day}`;
 }
 
+/**
+ * 秒级时间戳 → 本地时区时刻串 "HH:mm"，做消息行前缀 "[HH:mm] 昵称: 文本" 用。
+ * 与 localDate 相反：入参单位是秒（与消息记录里的 time 字段一致）。
+ * @param {number} ts - 秒级时间戳
+ * @returns {string} 形如 "08:30"
+ */
 export function hhmm(ts) {
   const d = new Date(ts * 1000);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
+/**
+ * Date 对象 → 完整时刻串 "YYYY-MM-DD HH:mm"，日志与「时间范围描述」文案用
+ * （index.js 的 span / backfill 日志即由它拼出）。
+ * @param {Date} d - Date 对象
+ * @returns {string} 形如 "2024-01-05 08:30"
+ */
 export function fmtFull(d) {
   return `${localDate(d.getTime())} ${hhmm(Math.floor(d.getTime() / 1000))}`;
 }
 
+/**
+ * 消息仓库：内存缓存 + JSONL/状态文件双份持久化，进程内单实例使用。
+ * 单条记录形状 {id, time, userId, name, card, text}（详见 data-format.md §1）：
+ * id = 消息 message_id 字符串；time = 秒；name = card||nickname||'未知'；
+ * card = 群名片原始值（可为空串）；text = 纯文本。
+ */
 export class MessageStore {
+  /**
+   * 建好 messages/ 与 state/ 子目录（recursive，已存在不报错）并恢复 lastSeenTs。
+   * @param {string} dataDir - 数据根目录（config.dataDir）
+   */
   constructor(dataDir) {
     this.dataDir = dataDir;
     this.msgsDir = path.join(dataDir, 'messages');
     this.stateDir = path.join(dataDir, 'state');
     fs.mkdirSync(this.msgsDir, { recursive: true });
     fs.mkdirSync(this.stateDir, { recursive: true });
+    // 已知群集合：出现过/加载过的群都会登记；backfill 补偿与日报遍历无配置时靠它枚举群
     this.groupIds = new Set();
+    // 每群内存态：messages 按消息 id 索引（该群消息全量常驻内存）；
+    // users 群成员名片缓存（userId → {name, card}）；lastSummaryAt 最后概括时间（秒，0 = 从未概括）
     this.groups = new Map();
+    // 已写盘闸 "群号:消息id"：防同一条消息重复追加 JSONL。只增不减——一旦写入终身有效；
+    // 重启后由 loadFromDisk 扫盘逐行重建，保证跨进程幂等
     this.writtenIds = new Set();
+    // 全局最后在线时间（秒）：backfill 补偿拉取的起点水位。设计为全局单值而非按群，
+    // 且只增不减——水位回退会让重启补偿重复拉回已见过的消息
     this.lastSeenTs = 0;
     this._loadLastSeen();
   }
 
+  // 全局 lastSeen 状态文件路径：data/state/lastSeen.json
   _lastSeenFile() {
     return path.join(this.stateDir, 'lastSeen.json');
   }
 
+  // 启动恢复 lastSeenTs；文件缺失或解析失败一律按 0
+  // （后果：backfill 起点退化为 now - maxHours，即拉满补偿窗口，见 data-format.md §2）
   _loadLastSeen() {
     try {
       const f = this._lastSeenFile();
@@ -75,10 +140,22 @@ export class MessageStore {
     }
   }
 
+  /**
+   * 读全局最后在线时间（backfill 补偿拉取的起点水位，见 index.js backfill）。
+   * @returns {number} 秒级时间戳；从未在线/状态文件损坏时为 0
+   */
   getLastSeenTs() {
     return this.lastSeenTs;
   }
 
+  /**
+   * 推进全局最后在线时间并落盘（内部取 max，单调不回退）。
+   * addMessage 每次落盘后都会调用；backfill 在整轮补偿结束后由 index.js 统一调用
+   * （见 data-format.md §2「addMessage 与 backfill 写入」）。
+   * @param {number} ts - 秒级时间戳（通常取刚落盘消息的 time）
+   * @returns {void}
+   * 副作用: 覆盖写 data/state/lastSeen.json；写失败静默忽略，内存值已先行推进
+   */
   setLastSeenTs(ts) {
     this.lastSeenTs = Math.max(this.lastSeenTs, ts);
     try {
@@ -88,6 +165,7 @@ export class MessageStore {
     }
   }
 
+  // 取群内存态（惰性建默认结构）——各公开方法的统一入口
   _group(groupId) {
     if (!this.groups.has(groupId)) {
       this.groups.set(groupId, { messages: new Map(), users: new Map(), lastSummaryAt: 0 });
@@ -95,14 +173,28 @@ export class MessageStore {
     return this.groups.get(groupId);
   }
 
+  // JSONL 路径模板：data/messages/<群号>/<YYYY-MM-DD>.jsonl（按天分片，追加写）
   _fileFor(groupId, dateStr) {
     return path.join(this.msgsDir, String(groupId), `${dateStr}.jsonl`);
   }
 
+  // 每群状态文件：data/state/<群号>.json，内容 {"lastSummaryAt": 秒}
   _stateFile(groupId) {
     return path.join(this.stateDir, `${groupId}.json`);
   }
 
+  /**
+   * 从磁盘按天把某群 [startTs, endTs) 时段的消息载入内存（同步），并顺带恢复该群
+   * lastSummaryAt。两参都省略时只扫今天（index.js 启动预载路径）；日报按时间段传参。
+   * 文件逐行解析：坏行跳过；同一文件内重复行会被剔除，发现重复/坏行时整文件重写
+   * 去重一次（日志「已去重」）；载入的每条消息同时登记进 writtenIds
+   * （重启后以此重建「防重复写」闸，见 data-format.md §1）。
+   * @param {string} groupId - 群号
+   * @param {number|null} [startTs=null] - 起始秒级时间戳（含），文件覆盖到其当天；null 视为今天
+   * @param {number|null} [endTs=null] - 结束秒级时间戳（不含），文件覆盖到 endTs-1 当天；null 视为今天
+   * @returns {Object} 该群内存态句柄 {messages, users, lastSummaryAt}（此后增删都反映在该对象上）
+   * 副作用: 发现重复/坏行时重写对应日期 JSONL 文件
+   */
   loadFromDisk(groupId, startTs = null, endTs = null) {
     const g = this._group(groupId);
     this.groupIds.add(groupId);
@@ -110,6 +202,7 @@ export class MessageStore {
     const startDate = startTs ? localDate(startTs * 1000) : localDate(Date.now());
     const endDate = endTs ? localDate((endTs - 1) * 1000) : localDate(Date.now());
 
+    // 日期游标逐天翻文件（含 startTs 当天到 endTs-1 当天，闭区间）
     let dateCursor = new Date(startDate + 'T00:00:00');
     const endDateObj = new Date(endDate + 'T00:00:00');
     let loaded = 0;
@@ -136,6 +229,7 @@ export class MessageStore {
             /* 忽略损坏行 */
           }
         }
+        // 存在重复或坏行：整文件重写为规范形态（每行唯一且可解析），保文件可重读
         if (uniqueLines.length !== lines.length) {
           fs.writeFileSync(file, uniqueLines.join('\n') + (uniqueLines.length ? '\n' : ''));
           log(`[store] 群 ${groupId} 文件 ${ds}.jsonl 已去重 (${lines.length} -> ${uniqueLines.length} 行)`);
@@ -157,6 +251,8 @@ export class MessageStore {
     return g;
   }
 
+  // 学习/更新群成员名片缓存：rec.card 非空且与缓存不一致时以新群名片为准（同步覆盖 name）；
+  // 首次见到的用户按 姓名 + 名片(缺省用姓名) 建档
   _learnUser(g, rec) {
     if (!rec.userId || !rec.name) return;
     const u = g.users.get(rec.userId);
@@ -168,6 +264,16 @@ export class MessageStore {
     if (!u) g.users.set(rec.userId, { name: rec.name, card: rec.card || rec.name });
   }
 
+  /**
+   * 落一条实时群消息（OneBot group_message 事件）→ 归一为记录 → 内存 + JSONL 追加。
+   * 无文本（纯图片/表情等）或该 (群, 消息id) 已写盘过则返回 null，且不落任何文件。
+   * @param {Object} event - OneBot 群消息事件；用到的字段：group_id、message_id、user_id、
+   *   time（缺省取当前秒）、message（段数组）、raw_message、sender.card/nickname
+   * @returns {Object|null} 新记录 {id, time, userId, name, card, text}；
+   *   返回 null 表示消息未入库（空文本或重复），下游无需再处理该消息
+   * 副作用: 同步 appendFileSync 追加当天 JSONL（写失败向上抛，会中断该消息路由——
+   *   现状行为勿"修复"，见 data-format.md §1）；更新内存态、推进 lastSeenTs、学名片
+   */
   addMessage(event) {
     const g = this._group(event.group_id);
     this.groupIds.add(event.group_id);
@@ -192,6 +298,17 @@ export class MessageStore {
     return rec;
   }
 
+  /**
+   * 落一条 backfill 拉回的历史消息（get_group_msg_history 的消息项）。字段命名兼容
+   * 两种来源：message_id/msgId、time/msgTime、user_id/sender.user_id（详见
+   * external-apis.md §1 响应形状）。无 id / 文本为空 / 内存已有 / 已写盘过 → 返回 null。
+   * 与 addMessage 不同：本方法不推进 lastSeenTs——历史补偿不应挪动在线水位，
+   * 由 index.js 的 backfill 在整轮结束后按最新一条统一 setLastSeenTs。
+   * @param {string} groupId - 群号
+   * @param {Object} msg - 历史消息对象（结构见 data-format.md §1 记录形状）
+   * @returns {Object|null} 新记录；id 缺失/文本为空/重复时返回 null
+   * 副作用: 同步追加对应日期 JSONL；更新内存态与群名片缓存
+   */
   addHistoryMessage(groupId, msg) {
     const g = this._group(groupId);
     this.groupIds.add(groupId);
@@ -219,6 +336,15 @@ export class MessageStore {
     return rec;
   }
 
+  /**
+   * 收集某群 time 严格大于 sinceTs 的内存消息，按 (time, id) 稳定升序。
+   * doSummary 的增量概括窗口即由它实现（since = getLastSummaryAt，0 时调用方
+   * 会退化为 now-1h，见 index.js doSummary）。只覆盖已载入内存的消息，
+   * 使用前需先 loadFromDisk。
+   * @param {string} groupId - 群号
+   * @param {number} sinceTs - 起始秒级时间戳（不含）
+   * @returns {Object[]} 升序记录数组（可能为空）
+   */
   collectSince(groupId, sinceTs) {
     const g = this._group(groupId);
     const recs = [...g.messages.values()].filter((r) => r.time > sinceTs);
@@ -226,6 +352,15 @@ export class MessageStore {
     return recs;
   }
 
+  /**
+   * 收集某群 [startTs, endTs) 半开区间内的内存消息，按 (time, id) 稳定升序。
+   * 日报用（昨日全天：昨天 0 点 ~ 今天 0 点，见 index.js dailyReport）。
+   * 只覆盖已载入内存的消息，使用前需先 loadFromDisk。
+   * @param {string} groupId - 群号
+   * @param {number} startTs - 区间起点（秒，含）
+   * @param {number} endTs - 区间终点（秒，不含）
+   * @returns {Object[]} 升序记录数组（可能为空）
+   */
   collectRange(groupId, startTs, endTs) {
     const g = this._group(groupId);
     const recs = [...g.messages.values()].filter((r) => r.time >= startTs && r.time < endTs);
@@ -233,16 +368,36 @@ export class MessageStore {
     return recs;
   }
 
+  /**
+   * 读某群最后概括时间（秒），doSummary 以它为增量概括窗口的起点
+   * （返回 0 时 doSummary 会退化为起点 = now-1h，见 index.js doSummary）。
+   * @param {string} groupId - 群号
+   * @returns {number} 秒级时间戳；从未概括/状态文件缺失损坏为 0
+   */
   getLastSummaryAt(groupId) {
     return this._group(groupId).lastSummaryAt;
   }
 
+  /**
+   * 记录某群概括完成时间并落盘。约定只在概括消息发送成功后调用（index.js doSummary
+   * 在 sendGroupMsg 之后执行）——失败不推进，下次触发会重新覆盖该时段；
+   * 手动删除 data/state/<群号>.json 即可强制重新概括（见 data-format.md §2）。
+   * @param {string} groupId - 群号
+   * @param {number} ts - 秒级时间戳（当前时刻）
+   * @returns {void}
+   * 副作用: 覆盖写 data/state/<群号>.json（本方法未包 try，写失败会向上抛）
+   */
   setLastSummaryAt(groupId, ts) {
     const g = this._group(groupId);
     g.lastSummaryAt = ts;
     fs.writeFileSync(this._stateFile(groupId), JSON.stringify({ lastSummaryAt: ts }));
   }
 
+  /**
+   * 返回全部已知群号（内存出现过 + loadFromDisk 扫过）。backfill 与日报遍历时，
+   * 若配置里没有显式群列表，index.js 以它为枚举兜底（见 index.js trackedGroups）。
+   * @returns {string[]} 群号数组（副本快照，改它不影响内部状态）
+   */
   trackedGroupIds() {
     return [...this.groupIds];
   }

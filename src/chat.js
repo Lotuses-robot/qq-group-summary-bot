@@ -1,3 +1,15 @@
+/*
+ * ChatBot 三职合一：① LLM 群聊聊天器（每群上下文记忆 chatHistoryLimit + 全局并发信号量限流）
+ * ② 三级知识库检索编排：本地梗词典（可信度最高、置顶）→ 知识缓存（同题二次命中，TTL 168h）→ 联网检索
+ *（PRTS.Wiki 仅方舟相关问题 / 萌娘百科无条件 / 维基百科仅非方舟且 enabled），按「来源可信度+热度」评分排序
+ * ③ 子服务宿主：构造内 new 全部 7 个依赖——WikiRetriever / MoegirlRetriever / WikipediaRetriever /
+ * LingoStore / KnowledgeCache / ArkDB / Semaphore；其中 lingo 与 arkdb 是事实共享单例
+ *（index.js 经 chatBot.lingo / chatBot.arkdb 注入 commands.js，WebUI 经 getLingo() 借用）。
+ *
+ * 内存状态（只存内存、不落盘、重启即清）：groupHistory（群 → 对话历史数组）、
+ * groupSpeakers（群 → 昵称/QQ → 「群友N」匿名代号映射；每群上限 200、先到先得满了逐出最早，
+ * 匿名机制见 docs/external-apis.md §5）。
+ */
 import { log } from './logger.js';
 import { WikiRetriever, isArknightsRelated, extractKeywords } from './wiki.js';
 import { MoegirlRetriever } from './moegirl.js';
@@ -50,6 +62,23 @@ function scoreResult(source, { size = 0, wordcount = 0, title = '' } = {}) {
   return trust + hotness;
 }
 
+/**
+ * 群聊 AI 应答器：chat() 为外部唯一入口（本地快路秒回 → 联网检索 → LLM 兜底，14 步主流程见 chat 内注释）。
+ * 对外只被 index.js 的路由 S13 调用；commands.js/WebUI 反向借用本实例的 lingo/arkdb 字段。
+ *
+ * @param {Object} [cfg={}] - 配置子集（config.llm 传入；含部分 chat 专属键）
+ * @param {string} [cfg.apiKey] - LLM API Key，缺省回退 LLM_API_KEY 环境变量
+ * @param {string} [cfg.baseUrl='https://api.openai.com/v1'] - OpenAI 兼容端点（末尾斜杠会被剥掉）
+ * @param {string} [cfg.model='gpt-3.5-turbo'] - LLM 模型名
+ * @param {number} [cfg.maxTokens=1024] - 回复上限（与 Summarizer 的默认 2048 不同，属既有差异）
+ * @param {number} [cfg.chatHistoryLimit=12] - 每群对话历史保留条数
+ * @param {boolean} [cfg.chatEnabled=true] - false 时 chat() 直接返回 null（不消耗 LLM）
+ * @param {string} [cfg.defaultReply] - LLM 调用失败时的兜底文案（照发）
+ * @param {string} [cfg.lingoFile] - 词典 JSON 文件路径（LingoStore）
+ * @param {string} [cfg.cacheFile] - 知识缓存 JSON 文件路径（KnowledgeCache）
+ * @param {string} [cfg.arkdbDir] - 本地明日方舟数据目录（ArkDB）
+ * @param {number} [cfg.chatConcurrency=3] - LLM 并发信号量上限
+ */
 export class ChatBot {
   constructor(cfg = {}) {
     this.apiKey = cfg.apiKey || process.env.LLM_API_KEY || '';
@@ -59,6 +88,7 @@ export class ChatBot {
     this.historyLimit = cfg.chatHistoryLimit ?? 12;
     this.enabled = cfg.chatEnabled !== false;
     this.defaultReply = cfg.defaultReply ?? '抱歉，我现在不方便回复，稍后再试试吧~';
+    // 7 个子服务在此一次性 new（子服务宿主职责）：三个检索器共享 cfg 的检索配置键
     this.wiki = new WikiRetriever(cfg);
     this.moegirl = new MoegirlRetriever(cfg);
     this.wikipedia = new WikipediaRetriever(cfg);
@@ -69,6 +99,7 @@ export class ChatBot {
     // 全局并发信号量：同时最多 3 个 LLM 请求，避免 API 限流
     this.semaphore = new Semaphore(cfg.chatConcurrency ?? 3);
 
+    // 每群运行时状态（内存，不落盘、重启即清）：对话历史与群友匿名映射
     this.groupHistory = new Map();
     // 群 → { 昵称: 编号 }，用于内部匿名区分发言者（群友1/群友2...）
     this.groupSpeakers = new Map();
@@ -91,6 +122,12 @@ export class ChatBot {
     return label;
   }
 
+  /**
+   * 取某群对话历史数组（键不存在时惰性建空数组）。
+   *
+   * @param {string|number} groupId - 群号（历史按群隔离）
+   * @returns {Array<{role: string, content: string}>} 该群历史数组（返回引用，调用方可直接 push）
+   */
   getHistory(groupId) {
     if (!this.groupHistory.has(groupId)) this.groupHistory.set(groupId, []);
     return this.groupHistory.get(groupId);
@@ -109,12 +146,31 @@ export class ChatBot {
     return false;
   }
 
+  /**
+   * 追加一条对话历史；超出 historyLimit 时从头丢弃最旧，保持固定窗口。
+   *
+   * @param {string|number} groupId - 群号
+   * @param {'user'|'assistant'} role - 发言角色（本类只写 user/assistant）
+   * @param {string} content - 消息文本（user 侧为「群友N：…」匿名前缀格式）
+   * 副作用：修改内存 groupHistory
+   */
   pushMessage(groupId, role, content) {
     const h = this.getHistory(groupId);
     h.push({ role, content });
     if (h.length > this.historyLimit) h.splice(0, h.length - this.historyLimit);
   }
 
+  /**
+   * 组装发给 LLM 的 messages 数组：system 人设（PRTS 角色 + 群聊纪律 + 匿名机制 + 不编造/不泄露约束）
+   * + 最近 historyLimit 条群历史 + 当前提问（说话人记为「群友N」匿名代号，真实昵称绝不进上下文，见 §5）。
+   *
+   * @param {string|number} groupId - 群号（取该群历史）
+   * @param {string} userName - 提问者昵称（仅内部换算匿名代号）
+   * @param {string} question - 问题文本
+   * @param {string} [wikiContext=''] - 检索/本地库知识上下文，拼在当前问题之后（可空）
+   * @param {string} [userId=''] - 提问者 QQ，优先于昵称作匿名映射键
+   * @returns {Object[]} [{role, content}] 消息数组（system 恒在首位）
+   */
   buildMessages(groupId, userName, question, wikiContext = '', userId = '') {
     const sys = [
       '你是 PRTS，罗德岛的人工智能辅助终端系统，现作为 QQ 群里的助手运行。',
@@ -143,9 +199,27 @@ export class ChatBot {
     return messages;
   }
 
+  /**
+   * 群聊应答主入口（路由 S13 调用）：本地快路（生日/干员资料/藏品/词典/缓存）全部不中才联网检索并落 LLM；
+   * 14 步关键顺序见方法体内注释。各快路与兜底的回复都经 _reply 统一发出并写群历史。
+   *
+   * @param {string|number} groupId - 群号（历史/匿名映射/缓存按群使用）
+   * @param {string} userName - 发送者昵称（只用于匿名映射，真实昵称不进 LLM 上下文）
+   * @param {string} question - 剥 @ 后的问题文本
+   * @param {string} [userId=''] - 发送者 QQ
+   * @returns {Promise<string|null>} null = chatEnabled=false 整链短路；否则为回复文案
+   *   （LLM 失败时 = defaultReply 兜底文案，不向外抛错）
+   * 副作用：追加群历史（内存）、可写知识缓存文件（联网检索出上下文时）
+   */
   async chat(groupId, userName, question, userId = '') {
-    if (!this.enabled) return null;
+    // 主流程 14 步关键顺序（快路命中即 return，未命中落下一步；各步语义见下方对应代码处）：
+    // ①开关短路 → ②话题相关性判定(isArk) → ③本地干员库建档 → ④生日快路 → ⑤干员资料快路 → ⑥藏品快路
+    // → ⑦生日检索引导 → ⑧词典命中计数 → ⑨缓存命中快路 → ⑩联网检索(PRTS→萌娘→维基，各带超时)
+    // → ⑪词典置顶 → ⑫评分排序 → ⑬拼接上下文并写缓存 → ⑭_reply 调 LLM（成功才写历史）
+    // 注：与函数内既有「1.本地词典 / 2.知识缓存 / 3.联网检索」的检索段局部编号并存，两套编号不同义
+    if (!this.enabled) return null; // ① chatEnabled=false：整链短路（不发不耗 LLM）
 
+    // ② 话题相关性判定（isArk），决定后面是否检索 PRTS
     const lingoHit = this.lingo.lookup(question);
     // 命中本地数据库干员名/藏品名也视为方舟相关，提高物品/角色问题触发检索的概率
     const arkNameHit = this.arkdb ? this.arkdb.containsOperatorName(question) : false;
@@ -285,14 +359,31 @@ export class ChatBot {
       : scored.sort((a, b) => b.score - a.score);
     log(`[chat] 群 ${groupId} 知识来源排序: ${sorted.map((s) => `${s.trustLabel}(${Math.round(s.score)})`).join(' > ')}`);
 
+    // ⑬ 拼接全部知识上下文（本地库段在前、检索段在后）；非空才写知识缓存
+    //（缓存键仅含问题文本、不含群号/提问人 → 跨群共享同一缓存，属既有语义）
     const knowledgeContext = [arkdbContext, birthdayContext, ...sorted.map((s) => s.context)].filter(Boolean).join('\n\n---\n\n');
     if (knowledgeContext) {
       this.cache.set(`q:${question}`, { context: knowledgeContext, sources: sorted.map((s) => s.sources).flat(), hits: 0 });
     }
 
+    // ⑭ 所有快路/缓存未中的最终出口：交给 _reply 调 LLM（该函数内部「成功才写历史」）
     return this._reply(groupId, userName, question, knowledgeContext, userId);
   }
 
+  /**
+   * LLM 调用统一出口（chat 内所有快路与兜底共用）：信号量内 POST {baseUrl}/chat/completions
+   * （temperature 0.8、max_tokens=maxTokens；请求无 HTTP 超时/重试，见 external-apis §2——此处不修）。
+   * 成功 → 追加 user+assistant 两条群历史后返回 content；失败（HTTP 非 2xx / 空内容）→
+   * 返回 defaultReply 兜底文案且不写历史（避免失败重试累积重复上下文）。
+   *
+   * @param {string|number} groupId - 群号
+   * @param {string} userName - 发送者昵称（仅用于匿名映射）
+   * @param {string} question - 问题文本
+   * @param {string} knowledgeContext - 已拼接的知识上下文（可能为空串）
+   * @param {string} [userId=''] - 发送者 QQ
+   * @returns {Promise<string>} 回复文案；失败时为 defaultReply 兜底文案（不抛错）
+   * 副作用：调 LLM；仅成功时写群历史（内存）
+   */
   async _reply(groupId, userName, question, knowledgeContext, userId = '') {
     const messages = this.buildMessages(groupId, userName, question, knowledgeContext, userId);
     const speaker = this._speakerLabel(groupId, userName, userId);
@@ -335,6 +426,12 @@ export class ChatBot {
     }
   }
 
+  /**
+   * 清空某群对话历史（如需按群重置上下文记忆时调用）。
+   *
+   * @param {string|number} groupId - 群号
+   * 副作用：删除内存 groupHistory 中的该群条目
+   */
   clearHistory(groupId) {
     this.groupHistory.delete(groupId);
   }

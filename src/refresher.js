@@ -1,3 +1,8 @@
+// 数据刷新模块：从 ArknightsGameData 上游（jsDelivr / GitHub raw 双镜像）下载方舟数据表，逐个结构校验后原子替换本地 JSON 数据库文件。
+// 导出：DataRefresher（class；对外接口 refresh()）。
+// 依赖：Node 内置 fs/path、全局 fetch、./logger.js（log）；唯一实例化点 src/index.js：new DataRefresher(path.join(dataDir, 'ark'), config.dataRefresh || {})，在启动回填流程中调用 refresh()。
+// 数据：读取 config.json 的 dataRefresh.baseUrl / baseUrls；写入 ark 目录下 character_table / handbook_info_table / roguelike_topic_table / gacha_table .json（含 .tmp/.bak），并维护 .etags.json（文件名 → ETag）。
+
 import fs from 'node:fs';
 import path from 'node:path';
 import { log } from './logger.js';
@@ -9,7 +14,14 @@ const DEFAULT_BASES = [
 
 // 定期从 ArknightsGameData 更新本地数据库文件。
 // 支持 ETag 版本比对（未变化跳过下载）、多镜像容错、原子写入（临时文件 → rename）。
+/**
+ * 方舟数据刷新器：按固定文件清单依次「下载 → 结构校验 → 原子替换」，单个文件失败不影响其余文件。
+ */
 export class DataRefresher {
+  /**
+   * @param {string} dataDir - 落地目录（如 data/ark），数据文件直接写入该目录
+   * @param {{baseUrl?: string, baseUrls?: string[]}} [cfg] - 镜像配置：cfg.baseUrl 优先，其次 cfg.baseUrls，缺省用内置双镜像；副作用：同步读取本目录 .etags.json
+   */
   constructor(dataDir, cfg = {}) {
     this.dataDir = dataDir;
     this.bases = cfg.baseUrl ? [cfg.baseUrl] : (cfg.baseUrls || DEFAULT_BASES);
@@ -67,6 +79,7 @@ export class DataRefresher {
     ];
   }
 
+  // 内部：读取 .etags.json（文件名 → ETag）；文件缺失/损坏返回空对象
   _loadEtags() {
     try {
       if (fs.existsSync(this.etagFile)) {
@@ -76,12 +89,14 @@ export class DataRefresher {
     return {};
   }
 
+  // 内部：写回 .etags.json；失败静默忽略
   _saveEtags() {
     try {
       fs.writeFileSync(this.etagFile, JSON.stringify(this.etags));
     } catch { /* 忽略 */ }
   }
 
+  // 内部：下载并原子替换单个文件——逐个镜像源尝试：304 视为未变化直接返回；校验或写盘失败则换下一源，全部失败抛出最后一个错误
   async _download(file) {
     const tmp = path.join(this.dataDir, `${file.name}.tmp`);
     const final = path.join(this.dataDir, file.name);
@@ -128,6 +143,11 @@ export class DataRefresher {
   }
 
   // 返回 { updated: string[], unchanged: string[], failed: string[] }
+  /**
+   * 刷新全部数据文件：逐个「下载 → 校验 → 原子替换」，结束后统一持久化 ETag 记录。
+   * @returns {Promise<{updated: string[], unchanged: string[], failed: string[]}>} updated/unchanged 为成功文件的 desc 名列表，failed 为「desc: 失败原因」列表；单项失败不中断其余文件
+   * 副作用：写盘（含 .tmp/.bak 文件）、更新 .etags.json、打印进度日志
+   */
   async refresh() {
     const updated = [];
     const unchanged = [];

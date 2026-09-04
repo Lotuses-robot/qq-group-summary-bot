@@ -3,6 +3,8 @@
 基于 [NapCat](https://github.com/NapNeko/NapCatQQ) 的 OneBot 11 协议，通过正向 WebSocket 连接，
 实时接收群消息、本地持久化，并通过 LLM 生成群聊概括与每日日报。
 
+> 📚 **深入文档见 [`docs/`](docs/index.md)**：架构与消息路由、配置参考、数据格式、对外接口面、重构提案。
+
 ## 功能
 
 - 实时接收群消息并持久化到 `data/messages/<群号>/<日期>.jsonl`

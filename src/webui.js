@@ -1,8 +1,28 @@
+/*
+ * Web 管理面板：零依赖（node:http + 内联 HTML）的本地服务，提供运行状态、本地词典管理、手动数据刷新
+ * 与脱敏配置查看；页面为 _html() 返回的内联模板字符串（勿改模板文案/脚本）。
+ * start(ctx) 注入契约 4 成员：{ getStatus(): Object, getLingo(): LingoStore, getConfig(): Object,
+ * refreshData(): Promise<string> }——由 index.js 底部装配处（webui.enabled !== false 时）提供。
+ *
+ * 鉴权：_handle 入口由 _authorized 统一拦截（Authorization: Bearer <token> 或 URL ?token=；token 为空则免鉴权）。
+ * 脱敏：仅 /api/config 出口经 _maskedConfig（llm.apiKey 留首 6 尾 4 加省略号、napcat.accessToken 置 ***）。
+ * 路由表：GET /、/index.html → 页面；GET /api/status → 状态快照；GET /api/lingo → 词条列表；
+ * POST /api/lingo → 学词/删词；POST /api/refresh → 手动刷新（共用 §6.3 refreshData）；GET /api/config → 脱敏配置；
+ * 其余 404；_handle 抛错由 start 内联 catch 兜成 500 JSON。
+ */
 import http from 'node:http';
 import { log } from './logger.js';
 
 // 简单的 Web 管理面板（Node 内置 http，零依赖）
 // API: /api/status /api/lingo /api/refresh /api/config
+/**
+ * 管理面板 HTTP 服务（默认 127.0.0.1:5210；由 index.js 按 webui.enabled 条件装配）。
+ *
+ * @param {Object} [cfg={}] - config.webui 配置子集
+ * @param {number} [cfg.port=5210] - 监听端口
+ * @param {string} [cfg.host='127.0.0.1'] - 监听地址（仅本机访问，勿外网暴露）
+ * @param {string} [cfg.token=''] - 访问 token；为空则免鉴权
+ */
 export class WebUI {
   constructor(cfg = {}) {
     this.port = cfg.port ?? 5210;
@@ -12,6 +32,16 @@ export class WebUI {
     this.ctx = null;
   }
 
+  /**
+   * 注入上下文并启动 HTTP 服务（立即 listen；端口占用等启动失败由 node:http 抛错冒泡给调用方）。
+   *
+   * @param {Object} ctx - 注入契约 4 成员（见文件头）
+   * @param {Function} ctx.getStatus - () => Object，状态快照（/api/status）
+   * @param {Function} ctx.getLingo - () => LingoStore，词典实例（/api/lingo 读写）
+   * @param {Function} ctx.getConfig - () => Object，原始配置对象（脱敏在出口 _maskedConfig 做）
+   * @param {Function} ctx.refreshData - () => Promise<string>，数据刷新编排（index.js refreshData）
+   * 副作用：监听端口；处理器抛错内联兜成 500 JSON 响应
+   */
   start(ctx) {
     this.ctx = ctx;
     this.server = http.createServer((req, res) => this._handle(req, res).catch((e) => {
@@ -22,6 +52,7 @@ export class WebUI {
     });
   }
 
+  /** 鉴权判定：Header `Authorization: Bearer` 或 URL query token 任一等于配置 token 即放行；未配置 token 恒放行 */
   _authorized(req) {
     if (!this.token) return true;
     const url = new URL(req.url, 'http://localhost');
@@ -30,6 +61,7 @@ export class WebUI {
     return h === `Bearer ${this.token}` || q === this.token;
   }
 
+  // 读请求体 JSON（>1MB 直接销毁连接防内存放大）；解析失败按空对象 {}
   async _body(req) {
     return new Promise((resolve) => {
       let data = '';
@@ -38,11 +70,13 @@ export class WebUI {
     });
   }
 
+  // 200 JSON 快捷响应
   _json(res, obj) {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify(obj));
   }
 
+  /** /api/config 出口脱敏：深拷贝后抹掉 llm.apiKey（留首 6 尾 4 加省略号）与 napcat.accessToken（全掩为 ***） */
   _maskedConfig() {
     const cfg = this.ctx.getConfig();
     const masked = JSON.parse(JSON.stringify(cfg));
@@ -61,16 +95,19 @@ export class WebUI {
     const p = url.pathname;
     const m = req.method || 'GET';
 
+    // 页面路由：返回内联 HTML
     if (p === '/' || p === '/index.html') {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(this._html());
       return;
     }
 
+    // 状态快照（getStatus 内会先 chatBot.arkdb.load() 保证计数新鲜）
     if (p === '/api/status') {
       return this._json(res, this.ctx.getStatus());
     }
 
+    // 词典：GET 列全部词条；POST {term,meaning} 学词 或 {action:'delete',term} 删词（与「学习/忘记」指令同走 lingo）
     if (p === '/api/lingo') {
       if (m === 'GET') {
         const entries = [...this.ctx.getLingo().entries.entries()].map(([term, meaning]) => ({ term, meaning }));
@@ -90,19 +127,23 @@ export class WebUI {
       }
     }
 
+    // 手动刷新（触发源：WebUI；与启动定时器/群指令 S11 共用 §6.3 refreshData，此处不传群号）
     if (p === '/api/refresh' && m === 'POST') {
       const result = await this.ctx.refreshData();
       return this._json(res, { ok: true, result });
     }
 
+    // 脱敏配置（密钥在 _maskedConfig 出口处打码）
     if (p === '/api/config') {
       return this._json(res, this._maskedConfig());
     }
 
+    // 未命中路由 → 404
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('Not Found');
   }
 
+  /** 管理面板页面：内联 HTML+CSS+JS 模板字符串（修改文案/脚本属模板改动，勿动；无外部资源依赖） */
   _html() {
     return `<!DOCTYPE html>
 <html lang="zh-CN">

@@ -1,3 +1,13 @@
+/*
+ * 萌娘百科检索器（通用 ACG/社区梗百科）：chat.js 三级知识库中「非方舟话题」的联网兜底，
+ * 并带 17 个方舟主词条页的梗/世界观补充检索（见 ARK_LINGO_PAGES）。
+ *
+ * 对外导出：MoegirlRetriever 类（统一检索出口 retrieve）；复用 wiki.js 导出的
+ * extractKeywords 做关键词清洗。类只在 chat.js 的 ChatBot 构造内 new
+ * （三个 Wiki 检索器同此），config 的 moegirl.* 键经构造参数注入。
+ * 读写数据：无本地读写；抓取 zh.moegirl.org.cn 网页（浏览器 UA 防反爬 + 正文容器
+ * 正则提取），仅 1.5s 最小间隔节流——fetch 无超时（见 architecture.md §8 坑 6）。
+ */
 import { log } from './logger.js';
 import { extractKeywords } from './wiki.js';
 
@@ -28,7 +38,19 @@ const ARK_LINGO_PAGES = [
   '明日方舟/世界观',
 ];
 
+/**
+ * 萌娘百科检索器：以「OpenSearch 直搜词条 → 抓 HTML 正文」为主，命中不足 topK 时
+ * 从 ARK_LINGO_PAGES 兜底页中定位关键词所在段落补足。
+ * enabled=false（moegirlEnabled）时检索类方法直接空转。
+ */
 export class MoegirlRetriever {
+  /**
+   * @param {Object} cfg - 配置（config.json 的 moegirl.* 键，缺省用默认值）
+   * @param {boolean} [cfg.moegirlEnabled=true] - 是否启用本检索器
+   * @param {number} [cfg.moegirlMaxCharPerPage=5000] - 单页正文并入上限字符
+   * @param {number} [cfg.moegirlTopK=2] - 并入 context 的页数上限
+   * @param {number} [cfg.moegirlMinInterval=1500] - 相邻请求最小间隔 ms（无超时，仅靠它限流）
+   */
   constructor(cfg = {}) {
     this.enabled = cfg.moegirlEnabled !== false;
     this.maxCharPerPage = cfg.moegirlMaxCharPerPage ?? 5000;
@@ -37,6 +59,7 @@ export class MoegirlRetriever {
     this._lastRequestAt = 0;
   }
 
+  // 节流：距上次请求不足 _minInterval 时 sleep 到满间隔
   async _wait() {
     const now = Date.now();
     if (now < this._lastRequestAt + this._minInterval) {
@@ -45,6 +68,13 @@ export class MoegirlRetriever {
     this._lastRequestAt = Date.now();
   }
 
+  /**
+   * OpenSearch 接口搜索词条（返回标题与词条链接）。
+   * 副作用: 请求前节流等待（_wait）；失败直接抛错，由调用方 try/catch 兜底。
+   * @param {string} keyword - 检索词
+   * @param {number} [limit=5] - 返回条数上限
+   * @returns {Promise<{title: string, url: string}[]>} 联想词条；空数组 = 无结果
+   */
   async searchOpensearch(keyword, limit = 5) {
     const url = `${API_URL}?action=opensearch&search=${encodeURIComponent(keyword)}&format=json&limit=${limit}`;
     await this._wait();
@@ -72,6 +102,12 @@ export class MoegirlRetriever {
     return [...variants];
   }
 
+  /**
+   * 以浏览器 UA 抓取词条整页 HTML（萌娘百科对默认 UA 有反爬拦截）。
+   * 副作用: 请求前节流等待；响应非 2xx 抛错，由调用方捕获跳过该词条。
+   * @param {string} title - 词条标题
+   * @returns {Promise<string>} 整页 HTML
+   */
   async getPageHtml(title) {
     await this._wait();
     const url = `${SITE_URL}/${encodeURIComponent(title)}`;
@@ -80,6 +116,12 @@ export class MoegirlRetriever {
     return resp.text();
   }
 
+  /**
+   * 从整页 HTML 提取正文纯文本：按优先级尝试 4 种正文容器正则，全部不中则退回
+   * 截取 mw-content-text 至页尾的片段，再统一剥 script/style/标签并压缩空白。
+   * @param {string} html - getPageHtml 的返回
+   * @returns {string} 正文纯文本；容器与 mw-content-text 都不在时近似为全页清洗结果
+   */
   extractBody(html) {
     let body = html;
     // 优先匹配正文容器（MediaWiki 常见结构）
@@ -115,6 +157,7 @@ export class MoegirlRetriever {
     return body;
   }
 
+  // 词条相关性过滤：标题含关键词即算相关；纯数字/代号关键词可放宽到命中方舟系标题
   _isRelevantHit(title, keyword) {
     const t = String(title).toLowerCase();
     const kw = String(keyword).toLowerCase();
@@ -124,6 +167,15 @@ export class MoegirlRetriever {
     return false;
   }
 
+  /**
+   * 检索总入口（chat.js 调用点）：先用核心词 OpenSearch 直搜词条抓正文，不足 topK
+   * 时从 ARK_LINGO_PAGES 兜底页中全文扫关键词所在段落（最多扫 5 个兜底页防慢）。
+   * 副作用: 兜底定位命中、搜索失败与最终汇总均写 [moegirl] 日志；单页抓取失败静默跳过。
+   * @param {string} keyword - 提问/关键词（内部经 extractKeywords 清洗出 core 再搜）
+   * @returns {Promise<{context: string, sources: string[], scoreSize: number}>}
+   *   context='' 且 sources=[] = 未启用或空关键词（此时无 scoreSize 字段）；
+   *   有命中时 scoreSize = 各页实际并入 content 的字符数合计
+   */
   async retrieve(keyword) {
     if (!this.enabled || !keyword) return { context: '', sources: [] };
 

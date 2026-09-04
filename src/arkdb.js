@@ -1,3 +1,16 @@
+/*
+ * 本地明日方舟数据库（ArkDB）：干员表 / 档案 / 肉鸽藏品 / 真实卡池四张表 +
+ * 语义模糊匹配 + 抽卡引擎，支撑 commands.js 的干员/藏品/生日/卡池/抽卡指令秒回。
+ *
+ * 对外导出：ArkDB 类（各公开方法见下）；默认只读 data/ark/ 下 refresher.js 下载的四张
+ * JSON（character_table / handbook_info_table / roguelike_topic_table /
+ * gacha_table），首次访问懒加载进内存，reload() 供数据更新后的热重载。
+ * 依赖与实例化点：只 import logger；实例在 chat.js 的 ChatBot 构造内 new 并暴露为
+ * chatBot.arkdb——commands.js（命令 ctx 注入）与 webui.js（面板查询/刷新）都在借用
+ * 同一实例，是事实上的进程内共享单例（见 architecture.md §7）。
+ * 读写数据：本类只读上述 JSON（缺表/解析失败只记日志不崩）；不写盘——抽卡记录落库
+ * 在 analytics.js，数据下载/校验/原子写入在 refresher.js。
+ */
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,7 +19,14 @@ import { log } from './logger.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DATA_DIR = path.resolve(__dirname, '..', 'data', 'ark');
 
+/**
+ * 明日方舟本地数据库：四表懒加载（load，幂等）+ 名称/藏品查询与语义模糊匹配 +
+ * 权重抽卡与真实卡池抽卡（出率语义见 randomPull / pullFromPool 的注释）。
+ */
 export class ArkDB {
+  /**
+   * @param {string} [dataDir=DEFAULT_DATA_DIR] - 数据目录（默认 src/../data/ark），测试可注入
+   */
   constructor(dataDir = DEFAULT_DATA_DIR) {
     this.dataDir = dataDir;
     this.characters = new Map(); // charId -> 基础信息
@@ -17,7 +37,10 @@ export class ArkDB {
     this._loaded = false;
   }
 
-  // 清空内存缓存并重新加载（用于数据定期更新后）
+  /**
+   * 清空全部内存表后重新加载（数据定期更新后的热重载入口：refresher → index.js → 此处）。
+   * @returns {void} 无返回；单表加载容错同 load
+   */
   reload() {
     this.characters.clear();
     this.handbooks.clear();
@@ -28,6 +51,13 @@ export class ArkDB {
     this.load();
   }
 
+  /**
+   * 懒加载（幂等，_loaded 已为真则直接返回）：依次读干员表 → 档案表 → 肉鸽藏品表 →
+   * 卡池表；缺表/解析失败仅记日志不抛错（损坏容错见 docs/data-format.md）。
+   * aliasMap = 干员名/代号/档案名 → charId 的汇总索引。
+   * 副作用: 填充 this.characters/handbooks/aliasMap/relics/gachaPools，置 _loaded=true。
+   * @returns {void} 无返回；查询/抽卡类方法内部都会先调本方法
+   */
   load() {
     if (this._loaded) return;
     const charFile = path.join(this.dataDir, 'character_table.json');
@@ -121,7 +151,12 @@ export class ArkDB {
     this._loaded = true;
   }
 
-  // 按藏品名查询
+  /**
+   * 按藏品名查询：先全等命中，再退化到「查询词是某藏品名子串」的包含匹配
+   * （如「支票」→「高卢银行支票」）；≤2 字短词不做包含匹配防误配。
+   * @param {string} name - 藏品名或其中片段
+   * @returns {Object|null} 藏品对象；null = 空名 / 未命中 / 短词且无全等命中
+   */
   findRelic(name) {
     if (!name) return null;
     this.load();
@@ -137,7 +172,11 @@ export class ArkDB {
     return null;
   }
 
-  // 判断文本是否提到某藏品（用于触发检索）
+  /**
+   * 判断文本是否包含任一藏品名（≥2 字），供 chat.js 决定是否走本地藏品检索分支。
+   * @param {string} text - 待判文本
+   * @returns {boolean} 命中任一藏品名为 true；空输入恒 false
+   */
   containsRelicName(text) {
     if (!text) return false;
     this.load();
@@ -147,6 +186,8 @@ export class ArkDB {
     }
     return false;
   }
+  // 从单条档案原始对象抽出常用档案字段：拼接全部 storyText 后按【小节名】正则抠行
+  // （性别/生日/出身地…）；infoName 为空或 Unknown 时回退取【代号】
   _extractProfile(handbook) {
     const text = handbook.storyTextAudio
       ?.map((s) => s.stories?.map((st) => st.storyText || '').join('\n'))
@@ -172,6 +213,12 @@ export class ArkDB {
     };
   }
 
+  /**
+   * 按名称/别名（含代号）查找干员：先全等命中 aliasMap，再退化到互相包含的子串匹配；
+   * ≤2 字短名拒绝子串模糊（防「山」「陈」等单字误配大量干员）。
+   * @param {string} name - 干员名/别名/代号
+   * @returns {Object|null} getById 合并后的干员对象；null = 未找到
+   */
   findByName(name) {
     if (!name) return null;
     this.load();
@@ -192,6 +239,7 @@ export class ArkDB {
   }
 
   // ---- 语义模糊匹配（bigram Dice 系数，无外部依赖的轻量 embedding 替代）----
+  // 去除非中英文字符后切相邻二元组（bigram）集合，作为轻量相似度特征
   _bigrams(str) {
     const s = String(str).replace(/[^\u4e00-\u9fffA-Za-z0-9]/g, '');
     const set = new Set();
@@ -199,6 +247,7 @@ export class ArkDB {
     return set;
   }
 
+  // Dice 系数 = 2×共同二元组数 / 两集合大小之和；任一为空集时相似度为 0
   _similarity(a, b) {
     const A = this._bigrams(a);
     const B = this._bigrams(b);
@@ -208,7 +257,13 @@ export class ArkDB {
     return (2 * inter) / (A.size + B.size);
   }
 
-  // 语义模糊匹配干员名（如"波登克"→"波登可"）
+  /**
+   * 语义模糊匹配干员名（bigram Dice 系数，如「波登克」→「波登可」）：候选名长度差
+   * >4 或 ≤1 字直接跳过，只取超过阈值的最高分。
+   * @param {string} name - 查询名
+   * @param {number} [threshold=0.38] - 相似度阈值（0–1），未超过视为不匹配
+   * @returns {Object|null} 得分最高的干员对象；无候选超过阈值时 null
+   */
   findOperatorFuzzy(name, threshold = 0.38) {
     if (!name) return null;
     this.load();
@@ -228,7 +283,13 @@ export class ArkDB {
     return best;
   }
 
-  // 语义模糊匹配藏品名（如"高卢的支票本"→"高卢银行支票"）
+  /**
+   * 语义模糊匹配藏品名（bigram Dice 系数，如「高卢的支票本」→「高卢银行支票」），
+   * 逻辑与阈值同 findOperatorFuzzy。
+   * @param {string} name - 查询名
+   * @param {number} [threshold=0.38] - 相似度阈值（0–1），未超过视为不匹配
+   * @returns {Object|null} 得分最高的藏品对象；无候选超过阈值时 null
+   */
   findRelicFuzzy(name, threshold = 0.38) {
     if (!name) return null;
     this.load();
@@ -248,7 +309,11 @@ export class ArkDB {
     return best;
   }
 
-  // 判断一段文本是否包含任何干员名/别名（≥2字），用于触发方舟检索
+  /**
+   * 判断文本是否包含任一干员名/别名（≥2 字），供 chat.js 的方舟话题门触发本地干员检索。
+   * @param {string} text - 待判文本
+   * @returns {boolean} 命中任一名字为 true；空输入恒 false
+   */
   containsOperatorName(text) {
     if (!text) return false;
     this.load();
@@ -259,6 +324,12 @@ export class ArkDB {
     return false;
   }
 
+  /**
+   * 按 charId 合并干员表与档案表：档案字段覆盖同名基础字段；name 优先取干员表
+   * （更可靠），查询类公开方法的最终出口。
+   * @param {string} id - 干员 charId（如 char_002_amiya）
+   * @returns {Object|null} 合并后的干员对象；两表都无此 id 时 null
+   */
   getById(id) {
     const base = this.characters.get(id);
     const profile = this.handbooks.get(id);
@@ -269,6 +340,12 @@ export class ArkDB {
     return merged;
   }
 
+  /**
+   * 在完整提问文本中找已收录干员名并返回其生日（指令「干员生日/生日 名」用）。
+   * @param {string} keyword - 完整提问文本（含干员名）
+   * @returns {{name: string, birthday: string}|null} name 为干员表名、birthday 为
+   *   「M月D日」档案原文（档案缺失或未写生日时为 ''）；文本不含任何已收录名字时 null
+   */
   searchBirthday(keyword) {
     // 从关键词提取干员名
     const names = [...this.aliasMap.keys()];
@@ -279,7 +356,11 @@ export class ArkDB {
     return { name: op.name || hit, birthday: op.birthday || '' };
   }
 
-  // 今日过生日的干员列表
+  /**
+   * 今日过生日的干员（指令「今日生日/今天谁生日」用；按「M月D日」精确比对档案生日）。
+   * @param {Date} [date=new Date()] - 参考日期（默认今天；测试可传其他日期）
+   * @returns {string[]} 干员名数组（按档案表遍历顺序、已去重）；无人过生日时为空数组
+   */
   todaysBirthdays(date = new Date()) {
     this.load();
     const m = date.getMonth() + 1;
@@ -294,8 +375,15 @@ export class ArkDB {
     return [...new Set(list)];
   }
 
-  // 权重抽卡（模拟明日方舟出率：6星2% 5星8% 4星50% 3星40%）
-  // 返回结构化数组 [{star, name, up}]，格式化交给调用方
+  /**
+   * 权重抽卡（无卡池时的降级常驻抽卡路径）：星级按明日方舟出率 6★2% / 5★8% /
+   * 4★50% / 3★40% 抽取，同星级内等概率随机；排除不可获取（预备干员 isNotObtainable）
+   * 与异格限定（isSpChar）。
+   * 副作用: 首次触发 load；结果不落盘——逐抽记录由调用方（commands.js → analytics）负责。
+   * @param {number} [n=1] - 抽数（单抽 1、十连 10）
+   * @returns {Array<{star: string, name: string, up: boolean}>} 逐抽结果（无 UP 概念，
+   *   up 恒为 false）；该星级无候选时 name 为「（未知）」，展示格式交由调用方渲染
+   */
   randomPull(n = 1) {
     this.load();
     const weights = { TIER_6: 0.02, TIER_5: 0.08, TIER_4: 0.5, TIER_3: 0.4 };
@@ -327,7 +415,12 @@ export class ArkDB {
       && !c.notObtainable;
   }
 
-  // 当前开放的卡池
+  /**
+   * 当前开放中的真实卡池（按服务器秒级时间过滤 openTime ≤ now ≤ endTime；
+   * 单侧时间字段缺省视为不设限）。
+   * @returns {Object[]} 卡池条目（含 gachaPoolId / gachaPoolName / dynMeta 等）；
+   *   无开放池或未加载卡池表时为空数组
+   */
   currentGachaPools() {
     this.load();
     const now = Math.floor(Date.now() / 1000);
@@ -336,7 +429,12 @@ export class ArkDB {
     );
   }
 
-  // 卡池概率提升干员（from dynMeta）
+  /**
+   * 提取卡池的 UP 干员名单：读 pool.dynMeta 的 main6RarityCharId / rare5CharList /
+   * rarityPickCharDict，合并去重并只保留干员表中真实存在的 id。
+   * @param {Object} pool - 卡池对象（如 currentGachaPools() 的条目）
+   * @returns {{up6: string[], up5: string[]}} 6★/5★ UP 干员的 charId 数组；无 UP 时为空数组
+   */
   poolRateUps(pool) {
     const up6 = [];
     const up5 = [];
@@ -353,7 +451,16 @@ export class ArkDB {
     };
   }
 
-  // 从指定卡池抽卡（真实出率：6★2% 5★8% 4★50% 3★40%；UP 干员占其星级概率的 50%）
+  /**
+   * 从真实卡池抽卡：星级概率 6★2% / 5★8% / 4★50% / 3★40%（与 randomPull 出率一致），
+   * 命中星级后再掷 50%：UP 干员占该星级的一半概率（多名 UP 均分），另一半由该星级
+   * 非 UP 干员均分；异格/联动限定（isSpChar）仅在其 UP 卡池中可出。
+   * 副作用: 首次触发 load；结果不落盘——逐抽记录由调用方（commands.js → analytics）负责。
+   * @param {Object} pool - 卡池对象；null/undefined 时降级为 randomPull(count)
+   * @param {number} [count=10] - 抽数
+   * @returns {Array<{star: string, name: string, up: boolean}>} 逐抽结果（up=true 表示
+   *   命中 UP）；该星级无候选时 name 为「未知」
+   */
   pullFromPool(pool, count = 10) {
     this.load();
     if (!pool) return this.randomPull(count);
