@@ -56,7 +56,7 @@ QQ 群聊机器人（NapCat / OneBot 11 / WS），Node ESM，LLM 生成群聊概
 - 不要在无讨论的情况下启动大规模结构改动（core/plugins 边界的移动会牵动注入面与测试）；
 - 新增功能时**不必**为未来抽象提前设计——指令/后台流程按当前惯例写进对应插件与装配段即可；
 - 若你发现"为加一个小功能必须动 runtime 路由链 + registry 分发语义"，先对照 refactor-proposal 剩余待办讨论，而不是临时发明第二套注册机制；
-- 独立待办（死配置修复、LLM 无超时/重试加固、wsConnected 复位、engines 修正）尚未立项，别顺手修——见 refactor-proposal「待办」。
+- 独立待办（死配置修复、LLM 无超时/重试加固）尚未立项，别顺手修——见 refactor-proposal「待办」。
 
 ## 仓库约定
 

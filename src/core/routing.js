@@ -138,7 +138,7 @@ export function createRouting(options) {
   function onEvent(event) {
     if (event.post_type === 'meta_event') {
       // S1 lifecycle/connect（WS open 后 napcat 自行合成）：置 ready/wsConnected，回填 selfId（若为 0），
-      // 随后异步 backfillHistory（仅此一次；非 connect 的 meta 事件直接 return 不处理）
+      // 随后异步 backfillHistory（仅此一次）
       if (event.meta_event_type === 'lifecycle' && event.sub_type === 'connect') {
         state.ready = true;
         state.wsConnected = true;
@@ -154,6 +154,15 @@ export function createRouting(options) {
           }
           await backfillHistory();
         })();
+        return;
+      }
+      // WS 断开（napcat close 回调合成的 lifecycle/disconnect）：仅复位 wsConnected——
+      // 状态页不再显示「在线」假象（2026-09 修复坑 2）。ready/backfillDone 不动：
+      // 断线期间无入站消息，重连后的 connect 事件会重新置位；backfillDone 保持「离线
+      // 补偿仅一次」语义
+      if (event.meta_event_type === 'lifecycle' && event.sub_type === 'disconnect') {
+        state.wsConnected = false;
+        log('[napcat] WS 断开，连接状态已复位');
       }
       return;
     }

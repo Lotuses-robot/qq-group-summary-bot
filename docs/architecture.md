@@ -186,7 +186,7 @@ filter.js 零 import；plugins 间零互 import（服务一律经 createApp 注�
 ## 8. 已知怪癖与坑（改代码前必读）
 
 1. **死配置（bug）**：`config.schedule.hour/minute` 与 `config.report.hour` **从未生效**——`Scheduler` 解构的是 `dailyHour/dailyMinute`，装配传的是 `schedule` 对象，实际恒为 **9:00**；runtime.js 里 `dailyHour = report.hour ?? 9` 是无消费方的遗读（已标 TODO 注释）。README 早年声称可配，实为假象。修复见 refactor-proposal 待办，勿在此处顺手改。
-2. **wsConnected 永不复位**：WS 断线自动重连成功后不回调 runtime，`wsConnected`（state 对象字段）一旦 true 不再变 false → WebUI 状态页可能显示在线（假象）。napcat 内部重连正常。
+2. ~~**wsConnected 永不复位**~~（2026-09 已修复）：WS 断开时 napcat 合成 `lifecycle/disconnect` 事件，routing S1 复位 `wsConnected`——WebUI 状态页如实显示离线；重连后 connect 事件置回 true。断线期间无入站事件，`ready`/`backfillDone` 语义不受影响。
 3. **缓存键跨群共享**：知识缓存 `q:<question>` 不含群号/提问人前缀，同问题在不同群命中同一缓存（含内容已过 TTL 判定）。属既有语义。
 4. **store 同步 IO 在路由热路径**：`addMessage` 同步 `appendFileSync`，写在一切路由判断之前；写失败异常会中断该消息的路由（不入 analytics、不回复）。异步化或加锁会改变现有行为。
 5. **首次消息可能卡顿**：Analytics 的 SQLite 首次写入会同步全量扫描导入 `data/messages/` 下全部 JSONL（`_ensureImported`）。

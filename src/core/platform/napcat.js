@@ -8,8 +8,9 @@
  * 因不含 lifecycle 分支而被上层事件处理函数忽略（详见 docs/external-apis.md §1）。
  *
  * 对外导出：类 NapCatClient，仅由 core/runtime.js 的 createApp 装配一次。
- * 连接建立（含重连）后本客户端会自己合成一个 lifecycle/connect 事件
- * （非 NapCat 原生下发），作为 core/routing.js S1 恢复就绪状态的锚点。
+ * 连接建立（含重连）后本客户端会自己合成一个 lifecycle/connect 事件（非 NapCat
+ * 原生下发），作为 core/routing.js S1 恢复就绪状态的锚点；WS 断开时同样合成
+ * lifecycle/disconnect 事件供 S1 复位 wsConnected（2026-09 修复，见 §8 坑 2）。
  */
 import WebSocket from 'ws';
 import { log } from './logger.js';
@@ -46,8 +47,9 @@ export class NapCatClient {
   /**
    * 注册事件回调：每条服务端 post_type 事件（消息/通知/请求/meta 心跳）都会按注册
    * 顺序派发给全部回调；单个回调抛错或返回 rejected Promise 只 console.error，
-   * 不影响其他回调。连接（含重连）时本客户端合成的 lifecycle/connect 事件也走这里
-   * ——core/routing.js S1 以它为恢复就绪的锚点（见 external-apis.md §1）。
+   * 不影响其他回调。连接（含重连）与断开时本客户端合成的 lifecycle/connect、
+   * lifecycle/disconnect 事件也走这里——core/routing.js S1 以 connect 恢复就绪、
+   * 以 disconnect 复位 wsConnected（见 external-apis.md §1）。
    * @param {Function} fn - 处理器 (event: Object) => void | Promise<void>
    * @returns {void}
    */
@@ -76,6 +78,9 @@ export class NapCatClient {
     this.ws.on('error', (e) => console.error('[napcat] ws error:', e.message));
     this.ws.on('close', () => {
       if (this.closed) return;
+      // 合成 lifecycle/disconnect（与 connect 同例）：routing S1 收到后复位 wsConnected，
+      // 状态页不再显示断线「在线」假象（2026-09 立项修复，见 architecture §8 坑 2）
+      this.emit({ post_type: 'meta_event', meta_event_type: 'lifecycle', sub_type: 'disconnect' });
       log(`[napcat] 连接断开，${this.reconnectDelay / 1000}s 后重连...`);
       setTimeout(() => this.connect(), this.reconnectDelay);
     });

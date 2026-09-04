@@ -96,7 +96,7 @@ export function createApp(config, overrides = {}) {
   const manualCmds = config.commands?.manualSummary ?? ['总结', '/总结', '#总结'];
 
   // startedAt：启动时刻（供 WebUI 状态页 uptime）；WS 在线标志 wsConnected 并入下方 state
-  //（断线重连成功不回调 createApp、一旦 true 不复位——architecture §8 坑 2，此处不修）
+  //（断开经 napcat 合成 disconnect 事件复位、重连后 connect 事件置回——2026-09 修复坑 2）
   const startedAt = Date.now();
 
   // 日报配置（report.*）：userId 私聊收件人、minMessages 活跃群消息门槛（默认 100）。
