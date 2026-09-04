@@ -9,7 +9,7 @@ QQ 群聊机器人（NapCat / OneBot 11 / WS），Node ESM，LLM 生成群聊概
 
 ## 运行与验证
 
-- 运行环境：**Node ≥ 22.5**（用了 `node:sqlite`；`package.json` engines ≥18 偏宽，勿信）。
+- 运行环境：**Node ≥ 22.5**（用了 `node:sqlite`；engines 已按 ≥22.5 声明，2026-09 修正）。
 - 依赖仅 `ws`；`npm install` 后 `npm start`（= `node src/index.js`）。
 - `npm test`：node:test 全量 = `node --test "test/**/*.test.js"`——`test/baseline/` 行为基线（store/analytics/lingo/arkdb/commands 直测）+ `test/smoke/`（导入面/注册表/插件接线/全链冒烟）。改了路由链、插件、存储语义就跑全量；纯文档/注释改动可跳过。
 - 改动语法自检：`node --check src/<file>.js`（core/ 与 plugins/ 同）。

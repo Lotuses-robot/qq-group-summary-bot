@@ -93,4 +93,4 @@ test/                 # node:test（无新依赖）：baseline/（行为基线�
 ## 待办（与重构无强耦合，可独立立项；P4 收尾后仍开放）
 
 - **死配置修复**：`schedule.hour/minute` 与 `report.hour` 从未生效（Scheduler 只读 `dailyHour/dailyMinute`），日报恒 9:00——修复需决策"让哪个键生效"并保持默认 9:00（runtime.js 装配处已标 TODO 注释；README 已如实标注死配置）。
-- **加固**：Summarizer 与 ChatBrain 的 LLM 调用、moegirl fetch 均无 HTTP 超时/重试；wsConnected 断线不复位（面板状态假象）；首次 SQLite 导入同步阻塞；`package.json` engines(≥18) 与 node:sqlite(≥22.5) 不符。
+- **加固**：Summarizer 与 ChatBrain 的 LLM 调用、moegirl fetch 均无 HTTP 超时/重试；wsConnected 断线不复位（面板状态假象）；首次 SQLite 导入同步阻塞（engines 已修正为 ≥22.5，2026-09 ✅）。
