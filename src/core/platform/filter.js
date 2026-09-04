@@ -1,7 +1,7 @@
 // 敏感内容过滤模块：识别群消息中的隐私信息（手机号/邮箱/身份证/银行卡/地址/IP）与敏感词，
 // 供消息入库与日报统计前剔除敏感消息、脱敏保留其余消息。
 // 导出：isSensitive / sanitizeText / filterMessages（均无副作用、无状态的纯函数）。
-// 依赖：无第三方依赖；由 src/index.js import filterMessages（经配置开关包装后作为消息过滤闸门），isSensitive/sanitizeText 供本模块内部复用。
+// 依赖：无第三方依赖；由 core/runtime.js import filterMessages（经配置开关包装后作为消息过滤闸门，注入 summary/report 插件），isSensitive/sanitizeText 供本模块内部复用。
 // 数据：不读写任何文件；匹配模式、关键词表与脱敏占位符均为本文件私有常量。
 
 // 模块私有：隐私信息正则集（带 g 标志，调用前需重置 lastIndex）；命中即判为敏感，并被 sanitizeText 替换为占位符

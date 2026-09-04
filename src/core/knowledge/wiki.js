@@ -1,10 +1,12 @@
 /*
- * PRTS.Wiki 检索器（明日方舟攻略维基）：chat.js 三级知识库中「方舟话题」的联网检索层。
+ * PRTS.Wiki 检索器（明日方舟攻略维基）：ChatBrain（plugins/chat.js）三级知识库中
+ * 「方舟话题」的联网检索层。
  *
  * 对外导出与复用：WikiRetriever 类（统一检索出口 retrieve），以及被 moegirl.js /
  * wikipedia.js / chat.js 复用的两个纯函数 extractKeywords（问句剥语气词）、
- * isArknightsRelated（方舟话题门）。类只在 chat.js 的 ChatBot 构造内 new
- * （三个 Wiki 检索器同此），config 的 wiki.* 键经构造参数注入。
+ * isArknightsRelated（方舟话题门）。类由 core/runtime.js 装配为知识共享单例
+ * （三个 Wiki 检索器同此，注入 ChatBrain）；config.llm 的 wikiEnabled/wikiTopK
+ * 等键经构造参数注入（注：键平铺在 llm 节下，无独立 wiki 节）。
  * 读写数据：无本地读写；请求 https://prts.wiki/api.php 的 MediaWiki API，带最小间隔
  * 节流、反爬冷却与 3 次重试（见 _waitForSlot/_get），单请求 12s 超时。
  */
@@ -251,7 +253,7 @@ export class WikiRetriever {
 
   /**
    * 检索总入口：search → 前 topK 页各取正文；长页且含关键词时把截断窗口移到关键词
-   * 附近，拼成「【标题】正文…」context 返回（chat.js 将其并入 LLM 提示）。
+   * 附近，拼成「【标题】正文…」context 返回（ChatBrain 将其并入 LLM 提示）。
    * @param {string} question - 群内原始提问
    * @returns {Promise<{context: string, sources: string[], scoreSize: number}>}
    *   context='' 且 sources=[] 表示未启用或零命中（此时无 scoreSize 字段）；

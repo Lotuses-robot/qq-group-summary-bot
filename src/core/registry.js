@@ -1,5 +1,5 @@
 /*
- * 插件注册表（core 骨架，P1 落地；P2/P3 才接插件与 dispatch 调用方）。
+ * 插件注册表与消息分发中枢（P1 落地骨架；P2/P3 已接入全部 9 插件与 dispatch 调用方）。
  *
  * 目标架构的注册/分发中枢（docs/refactor-proposal.md §目标架构）：
  * 插件声明式自注册，core 管线按确定性顺序驱动。插件描述符：
@@ -84,7 +84,7 @@ export class PluginRegistry {
    * 依次分发一条消息给所有 enabled 插件：首个返回 string/true 的插件短路。
    * @param {Object} ctx - 消息上下文（由 runtime 构造：群号/用户/文本/共享服务句柄）
    * @returns {string|true|null} string = 待发送文案、true = 已处理（发送由调用方负责）、
-   *   null = 无人认领（路由链落 chat 兜底的判定依据）
+   *   null = 无人认领（全部插件让位——正常配置下末端 chat 300 恒消费，不会落 null）
    */
   dispatch(ctx) {
     for (const p of this.sorted()) {

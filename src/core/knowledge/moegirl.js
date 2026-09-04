@@ -1,10 +1,10 @@
 /*
- * 萌娘百科检索器（通用 ACG/社区梗百科）：chat.js 三级知识库中「非方舟话题」的联网兜底，
+ * 萌娘百科检索器（通用 ACG/社区梗百科）：ChatBrain（plugins/chat.js）三级知识库中「非方舟话题」的联网兜底，
  * 并带 17 个方舟主词条页的梗/世界观补充检索（见 ARK_LINGO_PAGES）。
  *
  * 对外导出：MoegirlRetriever 类（统一检索出口 retrieve）；复用 wiki.js 导出的
- * extractKeywords 做关键词清洗。类只在 chat.js 的 ChatBot 构造内 new
- * （三个 Wiki 检索器同此），config 的 moegirl.* 键经构造参数注入。
+ * extractKeywords 做关键词清洗。类由 core/runtime.js 装配为知识共享单例
+ * （三个 Wiki 检索器同此，注入 ChatBrain）；启用/节流等 moegirl 系配置键经构造参数注入。
  * 读写数据：无本地读写；抓取 zh.moegirl.org.cn 网页（浏览器 UA 防反爬 + 正文容器
  * 正则提取），仅 1.5s 最小间隔节流——fetch 无超时（见 architecture.md §8 坑 6）。
  */
@@ -168,7 +168,7 @@ export class MoegirlRetriever {
   }
 
   /**
-   * 检索总入口（chat.js 调用点）：先用核心词 OpenSearch 直搜词条抓正文，不足 topK
+   * 检索总入口（ChatBrain 调用点）：先用核心词 OpenSearch 直搜词条抓正文，不足 topK
    * 时从 ARK_LINGO_PAGES 兜底页中全文扫关键词所在段落（最多扫 5 个兜底页防慢）。
    * 副作用: 兜底定位命中、搜索失败与最终汇总均写 [moegirl] 日志；单页抓取失败静默跳过。
    * @param {string} keyword - 提问/关键词（内部经 extractKeywords 清洗出 core 再搜）

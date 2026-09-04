@@ -70,7 +70,7 @@ function scoreResult(source, { size = 0, wordcount = 0, title = '' } = {}) {
 
 /**
  * 群聊 AI 应答器：chat() 为外部唯一入口（本地快路秒回 → 联网检索 → LLM 兜底，14 步主流程见 chat 内注释）。
- * 对外只被 runtime.js 的路由 S13（经 registry chat 插件）调用；构造注入全部服务（服务上移，P3）。
+ * 对外只被 registry 分发带的末端 chat 插件调用（即原路由链 S13；priority 300 恒消费，chatEnabled=false 时让位）；构造注入全部服务（服务上移，P3）。
  *
  * @param {Object} [deps={}] - 装配注入（runtime createApp 构造）
  * @param {Object} [deps.cfg={}] - 配置子集（config.llm 传入；含部分 chat 专属键）
@@ -264,7 +264,7 @@ export class ChatBrain {
       log(`[chat] 群 ${groupId} 生日问题命中本地数据库，跳过联网`);
       return this._reply(groupId, userName, question, `【本地干员数据库】${arkdbHit.name}的生日是${arkdbHit.birthday}。`, userId);
     }
-    if (arkdbHit && /(是谁|什么干员|介绍|档案|资料|是谁|是什么)/.test(String(question)) && (arkdbHit.desc || arkdbHit.gender)) {
+    if (arkdbHit && /(是谁|什么干员|介绍|档案|资料|是什么)/.test(String(question)) && (arkdbHit.desc || arkdbHit.gender)) {
       log(`[chat] 群 ${groupId} 干员资料问题命中本地数据库，跳过联网`);
       return this._reply(groupId, userName, question, arkdbContext, userId);
     }

@@ -24,8 +24,6 @@
 import http from 'node:http';
 import { log } from '../core/platform/logger.js';
 
-// 简单的 Web 管理面板（Node 内置 http，零依赖）
-// API: /api/status /api/lingo /api/refresh /api/config
 /**
  * 管理面板 HTTP 服务（默认 127.0.0.1:5210；由 runtime 经 webui 插件 hooks.start 按 webui.enabled 条件装配）。
  *
@@ -50,7 +48,7 @@ export class WebUI {
    * @param {Function} ctx.getStatus - () => Object，状态快照（/api/status）
    * @param {Function} ctx.getLingo - () => LingoStore，词典实例（/api/lingo 读写）
    * @param {Function} ctx.getConfig - () => Object，原始配置对象（脱敏在出口 _maskedConfig 做）
-   * @param {Function} ctx.refreshData - () => Promise<string>，数据刷新编排（index.js refreshData）
+   * @param {Function} ctx.refreshData - () => Promise<string>，数据刷新编排（runtime.refreshData，桥接 refresh 插件 api.refresh）
    * 副作用：监听端口；处理器抛错内联兜成 500 JSON 响应
    */
   start(ctx) {

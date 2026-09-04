@@ -1,6 +1,6 @@
 // 日志模块：把带时间戳的日志行同时输出到控制台与当日日志文件（根目录 logs/YYYY-MM-DD.log），跨天自动轮转并清理 14 天前的旧文件。
 // 导出：log / err。
-// 依赖：Node 内置 fs/path/url；无类导出，被 src/ 下绝大多数模块（index/commands/chat/cache/lingo/scheduler/refresher/store/webui 等）import 使用。
+// 依赖：Node 内置 fs/path/url；无类导出，被 core 全部服务与全部插件 import 使用（platform/ 内同级引用、knowledge/ 经 ../platform/logger.js、plugins 经 ../core/platform/logger.js）。
 // 数据：import 本模块即自动创建 logs/ 目录（模块级副作用）；无配置文件。
 
 import fs from 'node:fs';

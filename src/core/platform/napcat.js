@@ -7,9 +7,9 @@
  * 直接 reject。注意本客户端无应用层心跳：NapCat 定期下发的心跳 meta_event 到达后
  * 因不含 lifecycle 分支而被上层事件处理函数忽略（详见 docs/external-apis.md §1）。
  *
- * 对外导出：类 NapCatClient，仅在 src/index.js 被 new 一次。
+ * 对外导出：类 NapCatClient，仅由 core/runtime.js 的 createApp 装配一次。
  * 连接建立（含重连）后本客户端会自己合成一个 lifecycle/connect 事件
- * （非 NapCat 原生下发），作为 index.js 恢复就绪状态的锚点。
+ * （非 NapCat 原生下发），作为 core/routing.js S1 恢复就绪状态的锚点。
  */
 import WebSocket from 'ws';
 import { log } from './logger.js';
@@ -22,7 +22,7 @@ export class NapCatClient {
   /**
    * @param {string} url - NapCat WS 地址（config.napcat.wsUrl，如 ws://127.0.0.1:3001）
    * @param {Object} [opts={}] - 可选配置
-   * @param {number} [opts.selfId=0] - 机器人自身 QQ（未回填前为 0，index.js 启动后 getLoginInfo 回填）
+   * @param {number} [opts.selfId=0] - 机器人自身 QQ（未回填前为 0，routing S1 connect 后 getLoginInfo 回填）
    * @param {string} [opts.accessToken=''] - 连接鉴权 token；非空时拼 ?access_token= 查询参数
    * @param {number} [opts.reconnectDelay=3000] - 断线自动重连间隔（ms）
    */
@@ -47,7 +47,7 @@ export class NapCatClient {
    * 注册事件回调：每条服务端 post_type 事件（消息/通知/请求/meta 心跳）都会按注册
    * 顺序派发给全部回调；单个回调抛错或返回 rejected Promise 只 console.error，
    * 不影响其他回调。连接（含重连）时本客户端合成的 lifecycle/connect 事件也走这里
-   * ——index.js 以它为恢复就绪的锚点（见 external-apis.md §1）。
+   * ——core/routing.js S1 以它为恢复就绪的锚点（见 external-apis.md §1）。
    * @param {Function} fn - 处理器 (event: Object) => void | Promise<void>
    * @returns {void}
    */
@@ -154,7 +154,7 @@ export class NapCatClient {
   }
 
   /**
-   * 查机器人自身信息（index.js 启动时用来回填 selfId）。
+   * 查机器人自身信息（routing S1 connect 时用来回填 selfId）。
    * @returns {Promise<Object>} 形如 {user_id, nickname}
    */
   async getLoginInfo() {
@@ -173,7 +173,7 @@ export class NapCatClient {
   }
 
   /**
-   * 私聊发消息（每日日报推送用，index.js dailyReport）。
+   * 私聊发消息（每日日报推送用，plugins/report.js dailyReport）。
    * @param {string|number} userId - 目标 QQ 号
    * @param {string} message - 纯文本内容
    * @returns {Promise<Object>} 发送结果（含 message_id）
@@ -183,7 +183,7 @@ export class NapCatClient {
   }
 
   /**
-   * 查群资料（日报取群名作标题用，index.js dailyReport）。
+   * 查群资料（日报取群名作标题用，plugins/report.js dailyReport）。
    * @param {string|number} groupId - 群号
    * @returns {Promise<Object>} 形如 {group_id, group_name}
    */
@@ -192,11 +192,11 @@ export class NapCatClient {
   }
 
   /**
-   * 拉取群历史消息（backfill 补偿拉取用，index.js 启动回填）。
+   * 拉取群历史消息（backfill 补偿拉取用，core/routing.js backfillHistory）。
    * @param {string|number} groupId - 群号
    * @param {Object} [opts] - 查询选项
    * @param {number} [opts.messageSeq=0] - 起始 message_seq；0 = 从最新一条往前
-   * @param {number} [opts.count=50] - 拉取条数上限（index.js 实际传 1000）
+   * @param {number} [opts.count=50] - 拉取条数上限（routing backfillHistory 实际传 1000）
    * @returns {Promise<Object>} 形如 {messages: [...]}（消息项结构见 data-format.md §1）
    */
   getGroupMsgHistory(groupId, { messageSeq = 0, count = 50 } = {}) {

@@ -8,7 +8,7 @@
  * 文件布局与行格式详见 docs/data-format.md §1-2。
  *
  * 对外导出：纯函数 segmentToText / extractText / localDate / hhmm / fmtFull，
- * 以及类 MessageStore（仅在 src/index.js 被 new 一次，进程级单实例共享）。
+ * 以及类 MessageStore（仅由 core/runtime.js 的 createApp 装配一次，进程级单实例共享）。
  * 时间戳单位约定：消息记录统一用「秒」；纯函数里 localDate 的入参是毫秒，
  * hhmm 的入参是秒（与消息 time 字段一致），勿混用。
  */
@@ -83,7 +83,7 @@ export function hhmm(ts) {
 
 /**
  * Date 对象 → 完整时刻串 "YYYY-MM-DD HH:mm"，日志与「时间范围描述」文案用
- * （index.js 的 span / backfill 日志即由它拼出）。
+ * （plugins/summary.js 的 span 文案与 core/routing.js 的 backfill 日志即由它拼出）。
  * @param {Date} d - Date 对象
  * @returns {string} 形如 "2024-01-05 08:30"
  */
@@ -141,7 +141,7 @@ export class MessageStore {
   }
 
   /**
-   * 读全局最后在线时间（backfill 补偿拉取的起点水位，见 index.js backfill）。
+   * 读全局最后在线时间（backfill 补偿拉取的起点水位，见 core/routing.js backfillHistory）。
    * @returns {number} 秒级时间戳；从未在线/状态文件损坏时为 0
    */
   getLastSeenTs() {
@@ -150,7 +150,7 @@ export class MessageStore {
 
   /**
    * 推进全局最后在线时间并落盘（内部取 max，单调不回退）。
-   * addMessage 每次落盘后都会调用；backfill 在整轮补偿结束后由 index.js 统一调用
+   * addMessage 每次落盘后都会调用；backfill 在整轮补偿结束后由 core/routing.js 统一调用
    * （见 data-format.md §2「addMessage 与 backfill 写入」）。
    * @param {number} ts - 秒级时间戳（通常取刚落盘消息的 time）
    * @returns {void}
@@ -185,7 +185,7 @@ export class MessageStore {
 
   /**
    * 从磁盘按天把某群 [startTs, endTs) 时段的消息载入内存（同步），并顺带恢复该群
-   * lastSummaryAt。两参都省略时只扫今天（index.js 启动预载路径）；日报按时间段传参。
+   * lastSummaryAt。两参都省略时只扫今天（core/runtime.js createApp 装配期预载路径）；日报按时间段传参。
    * 文件逐行解析：坏行跳过；同一文件内重复行会被剔除，发现重复/坏行时整文件重写
    * 去重一次（日志「已去重」）；载入的每条消息同时登记进 writtenIds
    * （重启后以此重建「防重复写」闸，见 data-format.md §1）。
@@ -304,7 +304,7 @@ export class MessageStore {
    * 两种来源：message_id/msgId、time/msgTime、user_id/sender.user_id（详见
    * external-apis.md §1 响应形状）。无 id / 文本为空 / 内存已有 / 已写盘过 → 返回 null。
    * 与 addMessage 不同：本方法不推进 lastSeenTs——历史补偿不应挪动在线水位，
-   * 由 index.js 的 backfill 在整轮结束后按最新一条统一 setLastSeenTs。
+   * 由 core/routing.js 的 backfillHistory 在整轮结束后按最新一条统一 setLastSeenTs。
    * @param {string} groupId - 群号
    * @param {Object} msg - 历史消息对象（结构见 data-format.md §1 记录形状）
    * @returns {Object|null} 新记录；id 缺失/文本为空/重复时返回 null
@@ -340,7 +340,7 @@ export class MessageStore {
   /**
    * 收集某群 time 严格大于 sinceTs 的内存消息，按 (time, id) 稳定升序。
    * doSummary 的增量概括窗口即由它实现（since = getLastSummaryAt，0 时调用方
-   * 会退化为 now-1h，见 index.js doSummary）。只覆盖已载入内存的消息，
+   * 会退化为 now-1h，见 plugins/summary.js doSummary）。只覆盖已载入内存的消息，
    * 使用前需先 loadFromDisk。
    * @param {string} groupId - 群号
    * @param {number} sinceTs - 起始秒级时间戳（不含）
@@ -355,7 +355,7 @@ export class MessageStore {
 
   /**
    * 收集某群 [startTs, endTs) 半开区间内的内存消息，按 (time, id) 稳定升序。
-   * 日报用（昨日全天：昨天 0 点 ~ 今天 0 点，见 index.js dailyReport）。
+   * 日报用（昨日全天：昨天 0 点 ~ 今天 0 点，见 plugins/report.js dailyReport）。
    * 只覆盖已载入内存的消息，使用前需先 loadFromDisk。
    * @param {string} groupId - 群号
    * @param {number} startTs - 区间起点（秒，含）
@@ -371,7 +371,7 @@ export class MessageStore {
 
   /**
    * 读某群最后概括时间（秒），doSummary 以它为增量概括窗口的起点
-   * （返回 0 时 doSummary 会退化为起点 = now-1h，见 index.js doSummary）。
+   * （返回 0 时 doSummary 会退化为起点 = now-1h，见 plugins/summary.js doSummary）。
    * @param {string} groupId - 群号
    * @returns {number} 秒级时间戳；从未概括/状态文件缺失损坏为 0
    */
@@ -380,8 +380,8 @@ export class MessageStore {
   }
 
   /**
-   * 记录某群概括完成时间并落盘。约定只在概括消息发送成功后调用（index.js doSummary
-   * 在 sendGroupMsg 之后执行）——失败不推进，下次触发会重新覆盖该时段；
+   * 记录某群概括完成时间并落盘。约定只在概括消息发送成功后调用（plugins/summary.js
+   * doSummary 在 sendGroupMsg 之后执行）——失败不推进，下次触发会重新覆盖该时段；
    * 手动删除 data/state/<群号>.json 即可强制重新概括（见 data-format.md §2）。
    * @param {string} groupId - 群号
    * @param {number} ts - 秒级时间戳（当前时刻）
@@ -395,8 +395,8 @@ export class MessageStore {
   }
 
   /**
-   * 返回全部已知群号（内存出现过 + loadFromDisk 扫过）。backfill 与日报遍历时，
-   * 若配置里没有显式群列表，index.js 以它为枚举兜底（见 index.js trackedGroups）。
+   * 返回全部已知群号（内存出现过 + loadFromDisk 扫过）。backfill（core/routing.js）与
+   * report/refresh 插件遍历群时，若配置里没有显式群列表，以它作枚举兜底。
    * @returns {string[]} 群号数组（副本快照，改它不影响内部状态）
    */
   trackedGroupIds() {

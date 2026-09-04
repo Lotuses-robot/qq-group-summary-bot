@@ -1,6 +1,6 @@
 // 数据刷新模块：从 ArknightsGameData 上游（jsDelivr / GitHub raw 双镜像）下载方舟数据表，逐个结构校验后原子替换本地 JSON 数据库文件。
 // 导出：DataRefresher（class；对外接口 refresh()）。
-// 依赖：Node 内置 fs/path、全局 fetch、./logger.js（log）；唯一实例化点 src/index.js：new DataRefresher(path.join(dataDir, 'ark'), config.dataRefresh || {})，在启动回填流程中调用 refresh()。
+// 依赖：Node 内置 fs/path、全局 fetch、./logger.js（log）；唯一实例化点 core/runtime.js：new DataRefresher(path.join(dataDir, 'ark'), config.dataRefresh || {})；refresh() 由 refresh 插件的 api.refresh 编排调用（群指令/定时器/WebUI 三触发源共用同一 runner）。
 // 数据：读取 config.json 的 dataRefresh.baseUrl / baseUrls；写入 ark 目录下 character_table / handbook_info_table / roguelike_topic_table / gacha_table .json（含 .tmp/.bak），并维护 .etags.json（文件名 → ETag）。
 
 import fs from 'node:fs';
@@ -12,10 +12,9 @@ const DEFAULT_BASES = [
   'https://raw.githubusercontent.com/Kengxxiao/ArknightsGameData/master/zh_CN/gamedata/excel',
 ];
 
-// 定期从 ArknightsGameData 更新本地数据库文件。
-// 支持 ETag 版本比对（未变化跳过下载）、多镜像容错、原子写入（临时文件 → rename）。
 /**
  * 方舟数据刷新器：按固定文件清单依次「下载 → 结构校验 → 原子替换」，单个文件失败不影响其余文件。
+ * 支持 ETag 版本比对（未变化跳过下载）、多镜像容错、原子写入（临时文件 → rename，见 _download）。
  */
 export class DataRefresher {
   /**

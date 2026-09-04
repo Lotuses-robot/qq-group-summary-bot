@@ -1,7 +1,7 @@
 // 知识缓存模块：内存 Map + JSON 落盘的知识条目缓存（默认 data/knowledge_cache.json），带 TTL 过期剔除与命中计数，服务 AI 回答的知识上下文缓存。
 // 导出：KnowledgeCache（class；对外接口 get/set/hit/size）。
-// 依赖：Node 内置 fs/path/url、./logger.js（log）；唯一实例化点 src/chat.js 的 ChatBot（new KnowledgeCache(cfg.cacheFile, { ttlHours: cfg.cacheTtlHours ?? 168 })）。
-// 数据：读写 data/knowledge_cache.json（键为规范化查询串，值为 {…内容, cachedAt, hits}）；文件路径与 TTL 来自 ChatBot 配置 cfg.cacheFile / cfg.cacheTtlHours。
+// 依赖：Node 内置 fs/path/url、../platform/logger.js（log）；唯一实例化点 core/runtime.js（createApp 装配知识共享单例：new KnowledgeCache(llm.cacheFile, { ttlHours: llm.cacheTtlHours ?? 168 })）。
+// 数据：读写 data/knowledge_cache.json（键为规范化查询串，值为 {…内容, cachedAt, hits}）；文件路径与 TTL 来自 config.llm 的 cacheFile / cacheTtlHours（runtime 装配期解析）。
 
 import fs from 'node:fs';
 import path from 'node:path';

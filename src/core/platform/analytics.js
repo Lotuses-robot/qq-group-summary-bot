@@ -9,7 +9,7 @@
  * 详见 docs/data-format.md §3（库文件损坏时构造即抛 → 启动崩溃，仅 countMessages
  * 单独有 try 兜底返回 0）。
  *
- * 对外导出：类 Analytics，仅在 src/index.js 被 new 一次
+ * 对外导出：类 Analytics，仅由 core/runtime.js 的 createApp 装配一次
  * （dbPath = data/messages.db，messagesDir = data/messages）。
  */
 import { DatabaseSync } from 'node:sqlite';
@@ -104,8 +104,8 @@ export class Analytics {
   }
 
   /**
-   * 实时镜像一条已落盘的消息进 SQLite（index.js 在 store.addMessage /
-   * addHistoryMessage 成功后调用，backfill 循环与实时事件两处）。
+   * 实时镜像一条已落盘的消息进 SQLite（core/routing.js 在 store.addMessage /
+   * addHistoryMessage 成功后调用——实时事件（S5）与 backfillHistory 两处）。
    * 首次调用会先触发 _ensureImported 整库导入，可能阻塞数百 ms。
    * @param {string} groupId - 群号
    * @param {Object} rec - store 的记录 {id, time, userId, name, text}（缺字段各自有默认）
@@ -139,7 +139,7 @@ export class Analytics {
   }
 
   /**
-   * 库内消息总行数（Web 管理面板的统计用，见 index.js 状态接口）。
+   * 库内消息总行数（Web 管理面板 /api/status 统计用，见 core/runtime.js getStatus）。
    * @returns {number} 总条数；查询异常（如库文件损坏）时返回 0 而非抛错
    */
   countMessages() {

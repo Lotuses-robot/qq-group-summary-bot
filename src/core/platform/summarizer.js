@@ -4,11 +4,11 @@
  * 职责：把一组消息记录拼成结构化中文 prompt，调用 OpenAI 兼容
  * {llm.baseUrl}/chat/completions 生成 markdown 群聊概括或「昨日日报」。
  * 请求形状、prompt 约束与两调用点的差异详见 docs/external-apis.md §2——
- * 无 HTTP 超时/重试，失败一律抛错冒泡，由 index.js 调用方兜底。
+ * 无 HTTP 超时/重试，失败一律抛错冒泡，由调用方（summary/report 插件）兜底。
  *
- * 对外导出：类 Summarizer，仅在 src/index.js 被 new 一次（构造入参是 config.json
- * 的 llm 节）；summarize 被 index.js 的 doSummary（手动概括，purpose='manual'）
- * 与 dailyReport（昨日日报，purpose='daily'）两处调用。
+ * 对外导出：类 Summarizer，仅由 core/runtime.js 的 createApp 装配一次（构造入参是
+ * config.json 的 llm 节）；summarize 被 plugins/summary.js 的 doSummary（手动概括，
+ * purpose='manual'）与 plugins/report.js 的 dailyReport（昨日日报，purpose='daily'）两处调用。
  */
 import { hhmm } from './store.js';
 import { log } from './logger.js';
@@ -41,7 +41,7 @@ export class Summarizer {
    * choices[0].message.content 并 trim。success 无副作用（不写上下文历史）。
    * @param {string} groupId - 群号；只进日志，不拼入 prompt（prompt 明令不输出群号）
    * @param {Object[]} recs - 消息记录（需含 time/name/text）；空数组直接返回 null，不发请求
-   * @param {string} spanText - 时间范围描述文案（index.js 两处调用方构造后传入；
+   * @param {string} spanText - 时间范围描述文案（summary/report 两插件构造后传入；
    *   当前方法体未使用——prompt 要求模型不得输出时间范围等元信息，故保留为接口占位）
    * @param {string} [purpose='manual'] - 'manual'（手动群聊概括，约 300 字内）|
    *   'daily'（昨日日报，约 500 字内）；其他值按 manual 处理

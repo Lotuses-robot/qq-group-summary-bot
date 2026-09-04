@@ -9,7 +9,7 @@
  * 全部不命中返回 null 交下一个优先级插件（ark 600），与旧分发表逐条判定等价——
  * 跨域词头无碰撞（本域词头：学习/纠正/记/定义/忘记/删除/删/查词/词典查/释义/词典/词条数）。
  *
- * 依赖：logger；服务经 ctx 注入（与旧 commands.js 相同，见注册处 runtime S12）。
+ * 依赖：logger；服务经 ctx 注入（分发位置 = registry PRIORITY 的 lingo 带 700，见 core/registry.js）。
  * 实例化点：src/plugins/index.js 以 descriptor 形式随 commandPlugins 数组交付 runtime 注册。
  */
 import { log } from '../core/platform/logger.js';

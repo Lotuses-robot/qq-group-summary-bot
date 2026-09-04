@@ -29,7 +29,7 @@ import { PRIORITY } from '../core/registry.js';
  * @param {Function} deps.filterMessages - (recs) => {kept, filtered} 敏感过滤包装
  *   （enabled 开关已由 runtime 按 config.filter 判定并包装）
  * @param {number} deps.minMessages - 概括消息数门槛（config.minMessages ?? 1）
- * @param {string[]} deps.manualCmds - 触发关键词表（config.commands.manualSummary，缺省 总结//总结/#总结）
+ * @param {string[]} deps.manualCmds - 触发关键词表（config.commands.manualSummary，缺省 ['总结','/总结','#总结']）
  * @param {Function} deps.isReady - () => boolean，WS 就绪锚点（runtime ready 标志的读引用）
  * @returns {Object} 注册表可直接 register 的插件描述符
  */

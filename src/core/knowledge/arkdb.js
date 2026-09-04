@@ -5,9 +5,9 @@
  * 对外导出：ArkDB 类（各公开方法见下）；默认只读 data/ark/ 下 refresher.js 下载的四张
  * JSON（character_table / handbook_info_table / roguelike_topic_table /
  * gacha_table），首次访问懒加载进内存，reload() 供数据更新后的热重载。
- * 依赖与实例化点：只 import logger；实例在 chat.js 的 ChatBot 构造内 new 并暴露为
- * chatBot.arkdb——指令插件（命令 ctx 注入）与 webui.js（面板查询/刷新）都在借用
- * 同一实例，是事实上的进程内共享单例（见 architecture.md §7）。
+ * 依赖与实例化点：只 import logger；实例由 core/runtime.js 装配为知识共享单例（P3
+ * 「服务上移」）——dispatch ctx 注入指令插件、注入 ChatBrain、getStatus/WebUI 借用，
+ * 同一实例全进程共享（见 architecture.md §7）。
  * 读写数据：本类只读上述 JSON（缺表/解析失败只记日志不崩）；不写盘——抽卡记录落库
  * 在 analytics.js，数据下载/校验/原子写入在 refresher.js。
  */
@@ -39,7 +39,8 @@ export class ArkDB {
   }
 
   /**
-   * 清空全部内存表后重新加载（数据定期更新后的热重载入口：refresher → index.js → 此处）。
+   * 清空全部内存表后重新加载（数据定期更新后的热重载入口：refresh 插件 api.refresh
+   * 编排 → refresher.refresh() 发现更新 → 此处）。
    * @returns {void} 无返回；单表加载容错同 load
    */
   reload() {

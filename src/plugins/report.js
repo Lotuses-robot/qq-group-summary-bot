@@ -15,7 +15,7 @@
  * reportUserId。全程不写 lastSummaryAt/lastSeen 状态。
  *
  * 依赖：logger；服务/配置经 createReportPlugin(deps) 注入（scheduler/就绪标志属 runtime 资产，
- * 经 deps 移交；getAllGroupIds 与 backfillHistory 共用、仍留在 runtime 并注入）；
+ * 经 deps 移交；getAllGroupIds 与 backfillHistory 共用、现居 core/routing.js 工厂并经 deps 注入）；
  * 实例化点：core/runtime.js createApp 装配期。
  * 读写数据：读消息存储（loadFromDisk/collectRange）；经 summarizer 调 LLM 概括；私聊经 client。
  */
@@ -31,7 +31,7 @@ import { log, err } from '../core/platform/logger.js';
  * @param {Object} deps.scheduler - Scheduler 实例（每日 9:00 循环调度，start 在 hooks.start 注册）
  * @param {Function} deps.filterMessages - (recs) => {kept, filtered} 敏感过滤包装（同 summary 插件）
  * @param {Function} deps.trackedGroups - () => Array，config.groups 访问器
- * @param {Function} deps.getAllGroupIds - () => Promise<Array>，活跃群集合（与 runtime backfill 共用）
+ * @param {Function} deps.getAllGroupIds - () => Promise<Array>，活跃群集合（与 routing backfillHistory 共用）
  * @param {number} deps.reportUserId - 日报私聊收件人（config.report.userId；0/缺省 = 不启用）
  * @param {number} deps.reportMinMessages - 活跃群消息门槛（config.report.minMessages ?? 100）
  * @param {Function} deps.isReady - () => boolean，WS 就绪锚点

@@ -2,9 +2,9 @@
  * 维基百科检索器（可选知识源，默认关闭）：通用「非方舟话题」的联网兜底之一。
  *
  * 对外导出：WikipediaRetriever 类（统一检索出口 retrieve）；复用 wiki.js 导出的
- * extractKeywords 做关键词清洗。与另两个 Wiki 检索器一样只在 chat.js 的 ChatBot
- * 构造内 new；cfg.wikipediaEnabled 须严格为 true 才启用（zh.wikipedia 需代理，
- * 启用/话题门约定见 external-apis.md §3）。
+ * extractKeywords 做关键词清洗。与另两个 Wiki 检索器一样由 core/runtime.js 装配为
+ * 共享单例并注入 ChatBrain；cfg.wikipediaEnabled 须严格为 true 才启用（zh.wikipedia
+ * 需代理，启用/话题门约定见 external-apis.md §3）。
  * 读写数据：无本地读写；调 zh.wikipedia.org/w/api.php 的段落 extract 纯文本，
  * 单请求 10s 超时 + 1.5s 最小间隔节流，失败由 retrieve 捕获记日志。
  */
