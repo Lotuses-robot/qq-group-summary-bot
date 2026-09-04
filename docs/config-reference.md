@@ -30,7 +30,7 @@
 | `minMessages` | number | `1` | summary 插件（doSummary） | 手动总结低于该消息条数时跳过 |
 | `includeSelf` | boolean | `false` | routing（S3） | `true` 时机器人自己的消息也计入 |
 | `commands.manualSummary` | string[] | `['总结','/总结','#总结']` | summary 插件（分发带 900） | 手动总结触发关键词（剥 @ 后问题文本 includes 判定） |
-| `backfill.maxHours` | number | `72` | routing backfillHistory（core/routing.js） | lastSeen 兜底上限；实际从 lastSeen 时刻起拉 |
+| `backfill.maxHours` | number | `72` | routing backfillHistory（core/routing.js） | 每群 lastSeen 的兜底上限；实际从该群 lastSeen 时刻起拉（按群水位，坑 9 修复后） |
 | `dataRefresh.enabled` | boolean | `true` | refresh 插件（hooks.start 定时器） | 数据定期更新总开关（`!== false` 视为开） |
 | `dataRefresh.intervalHours` | number | `24` | refresh 插件 | 自动刷新间隔 |
 | `dataRefresh.firstDelayMinutes` | number | `30` | refresh 插件 | 首次刷新延迟（启动后） |

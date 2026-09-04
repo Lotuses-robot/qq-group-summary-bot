@@ -8,11 +8,12 @@
  *
  * 锁定目标：① S1 connect 置位 state（ready/wsConnected/selfId 回填）并仅执行一次
  * backfill（backfillDone 置位后二次 connect 不再拉）；② backfill 语义：time<sinceTs 过滤、
- * 批内重复 message_id 去重、addHistoryMessage 真值才 analytics.record、有新增才
- * setLastSeenTs（取批内最新 time）；③ get_login_info 失败：记日志继续 backfill（原 S1
+ * 批内重复 message_id 去重、addHistoryMessage 真值才 analytics.record、该群有新增才
+ * setLastSeenTs(gid, 批内最新 time)；③ get_login_info 失败：记日志继续 backfill（原 S1
  * catch 语义，selfId 保持 0）；④ getAllGroupIds：get_group_list 成功取 group_id 列表，
  * 调用失败回退 store.trackedGroupIds；⑤ S1 disconnect：仅复位 wsConnected（ready/
- * backfillDone 不动；重连后 connect 置回且不重复 backfill）。
+ * backfillDone 不动；重连后 connect 置回且不重复 backfill）；⑥ backfill 按群独立起点
+ * （2026-09 修复坑 9）：各群 sinceTs = max(该群水位, now−72h)，群间互不钳制。
  *
  * 直接构造 createRouting（不经 createApp），fake 全内存；连接工厂参数以 over 覆盖默认。
  */
@@ -32,7 +33,8 @@ const flush = async () => {
 /** 造一套全 fake 的 createRouting（over 可覆盖默认行为） */
 function mkRouting(over = {}) {
   const state = { selfId: 0, ready: false, backfillDone: false, wsConnected: false };
-  const calls = { getHistory: 0, added: [], recorded: [], lastSeenSet: null };
+  const seenBy = over.seenByGroup ?? {}; // 各群水位（坑 9：backfill 起点按群读）
+  const calls = { getHistory: 0, added: [], recorded: [], lastSeenSet: [] };
   const client = {
     call: async () => {
       if (over.groupListError) throw new Error('get_group_list 失败');
@@ -46,9 +48,9 @@ function mkRouting(over = {}) {
     sendGroupMsg: async () => {},
   };
   const store = {
-    getLastSeenTs: () => over.lastSeenTs ?? 0,
+    getLastSeenTs: (gid) => seenBy[String(gid)] ?? 0,
     addHistoryMessage: (gid, m) => { calls.added.push([gid, m]); return { text: '历史消息', time: m.time }; }, // 恒真值 = 新增
-    setLastSeenTs: (t) => { calls.lastSeenSet = t; },
+    setLastSeenTs: (gid, t) => { calls.lastSeenSet.push([gid, t]); },
     trackedGroupIds: () => [111, 222],
   };
   const analytics = { record: (gid, rec) => calls.recorded.push([gid, rec]) };
@@ -93,7 +95,7 @@ describe('routing：S1 connect → selfId 回填 + backfill 单次执行', () =>
     assert.equal(calls.getHistory, 1);    // 只拉群 7 一次
     assert.equal(calls.added.length, 2);  // a、b 两条新增（重复 a 与超窗 old 均不计）
     assert.equal(calls.recorded.length, 2);
-    assert.equal(calls.lastSeenSet, now); // 有新增 → setLastSeenTs(批内最新 time)
+    assert.deepEqual(calls.lastSeenSet, [[7, now]]); // 有新增 → setLastSeenTs(7, 批内最新 time)
 
     // 二次 connect：backfillDone 置位后不再拉取
     routing.onEvent(connectEvent());
@@ -127,6 +129,28 @@ describe('routing：S1 connect → selfId 回填 + backfill 单次执行', () =>
     assert.equal(state.selfId, 0);
     assert.equal(state.ready, true);
     assert.equal(calls.added.length, 1); // backfill 不受 selfId 回填失败影响
+  });
+
+  it('backfill 按群独立起点（2026-09 修复坑 9）：高水位群窄窗过滤、零水位群拉满 72h 兜底', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const H = 3600;
+    const { routing, calls } = mkRouting({
+      tracked: [1, 2],
+      seenByGroup: { 1: now - 30 * H }, // 1 群水位 30h 前；2 群无水位记录
+      messages: [
+        { message_id: 'old', time: now - 40 * H }, // 早于 1 群起点(now−30h)、晚于 2 群起点(now−72h)
+        { message_id: 'new', time: now },
+      ],
+    });
+
+    routing.onEvent(connectEvent());
+    await flush();
+
+    // 两群读各自水位、互不钳制：1 群只收 new（old 被 30h 水位滤掉）；2 群 old+new 都收
+    assert.deepEqual(calls.added.map(([gid, m]) => [gid, m.message_id]),
+      [[1, 'new'], [2, 'old'], [2, 'new']]);
+    // 每群独立 setLastSeenTs（各取批内最新 time）
+    assert.deepEqual(calls.lastSeenSet, [[1, now], [2, now]]);
   });
 });
 

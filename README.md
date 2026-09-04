@@ -133,7 +133,7 @@ curl -o data/ark/gacha_table.json \
   - `minMessages`：昨日消息数达到该值的群才生成日报（默认 100）
   - `hour` / `minute`：日报触发时刻（默认 `9` / `0`，即每天 9:00）
 - `quiet`：静默时段（默认 `enabled: true, start: 0, end: 8`，即 0:00-8:00 不响应总结；设 `enabled: false` 可关闭）
-- `backfill`：离线补偿（`maxHours` 默认 72，为 lastSeen 的兜底上限；实际从上次下线的 lastSeen 时刻开始补偿）
+- `backfill`：离线补偿（`maxHours` 默认 72，为**各群** lastSeen 的兜底上限；实际从该群上次下线的 lastSeen 时刻开始补，每群水位独立）
 - `dataRefresh`：数据定期更新（`enabled` 默认 true，`intervalHours` 默认 24，`firstDelayMinutes` 默认 30，`announce` 默认 false 关闭新增播报）
 - `webui`：Web 管理面板（`enabled` 默认 true，`host` 默认 127.0.0.1 仅本机，`port` 默认 5210，`token` 可选访问口令）
 - `filter`：敏感内容过滤（`enabled: true` 默认开启）
@@ -225,7 +225,7 @@ Register-ScheduledTask -TaskName "QQSummaryBot" -Action $action -Trigger $trigge
 - 重启：双击 `start_bot.bat`
 - 查看日志：`logs/` 目录（按天轮转，如 `logs/2026-08-16.log`，自动清理 14 天前的日志）
 - NapCat 与 QQ 登录：用 NCD 管理，别直接用本机器人脚本去动 NapCat 配置
-- 数据文件：`data/messages/<群号>/<日期>.jsonl`（消息）、`data/state/lastSeen.json`（最后在线时间）
+- 数据文件：`data/messages/<群号>/<日期>.jsonl`（消息）、`data/state/lastSeen.json`（各群最后在线时间）
 
 ## 常见问题
 

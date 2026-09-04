@@ -4,8 +4,9 @@
  * 职责：把 OneBot 实时群消息事件与 backfill 拉回的历史消息统一归一成纯文本记录，
  * 追加写入 data/messages/<群号>/<YYYY-MM-DD>.jsonl，并按群缓存在内存
  * （messages/users/lastSummaryAt）；另维护两份状态文件：data/state/<群号>.json
- * （每群最后概括时间）与 data/state/lastSeen.json（全局 lastSeenTs，backfill 起点）。
- * 文件布局与行格式详见 docs/data-format.md §1-2。
+ * （每群最后概括时间）与 data/state/lastSeen.json（各群 lastSeen 水位，backfill 按群起点；
+ * 2026-09 由全局单值改为 per-group，见 docs/data-format.md §2）。文件布局与行格式
+ * 详见 docs/data-format.md §1-2。
  *
  * 对外导出：纯函数 segmentToText / extractText / localDate / hhmm / fmtFull，
  * 以及类 MessageStore（仅由 core/runtime.js 的 createApp 装配一次，进程级单实例共享）。
@@ -99,7 +100,7 @@ export function fmtFull(d) {
  */
 export class MessageStore {
   /**
-   * 建好 messages/ 与 state/ 子目录（recursive，已存在不报错）并恢复 lastSeenTs。
+   * 建好 messages/ 与 state/ 子目录（recursive，已存在不报错）并恢复各群 lastSeen 水位。
    * @param {string} dataDir - 数据根目录（config.dataDir）
    */
   constructor(dataDir) {
@@ -116,50 +117,87 @@ export class MessageStore {
     // 已写盘闸 "群号:消息id"：防同一条消息重复追加 JSONL。只增不减——一旦写入终身有效；
     // 重启后由 loadFromDisk 扫盘逐行重建，保证跨进程幂等
     this.writtenIds = new Set();
-    // 全局最后在线时间（秒）：backfill 补偿拉取的起点水位。设计为全局单值而非按群，
-    // 且只增不减——水位回退会让重启补偿重复拉回已见过的消息
-    this.lastSeenTs = 0;
+    // 各群最后在线时间（秒，群号 String 归一）：backfill 补偿按群的起点水位（见
+    // docs/architecture.md §6.1）。每群只增不减——水位回退会让重启补偿重复拉回已见过的消息；
+    // 群间独立——单群拉取失败不会推高别群起点（2026-09 修复坑 9：原为全局单值，失败群
+    // 缺口会被其他群推高的水位永久错过）
+    this.lastSeenByGroup = new Map();
+    // v1 旧形状（{"lastSeenTs": n}）读入时的进程内回退值：本次启动新出现的群在
+    // 首写 v2 文件前都按它起水位；v2 文件已存在时恒 0（见 _loadLastSeen）
+    this._legacyV1 = 0;
     this._loadLastSeen();
   }
 
-  // 全局 lastSeen 状态文件路径：data/state/lastSeen.json
+  // lastSeen 状态文件路径：data/state/lastSeen.json（v2 形状 {"byGroup": {群号: 秒}}）
   _lastSeenFile() {
     return path.join(this.stateDir, 'lastSeen.json');
   }
 
-  // 启动恢复 lastSeenTs；文件缺失或解析失败一律按 0
-  // （后果：backfill 起点退化为 now - maxHours，即拉满补偿窗口，见 data-format.md §2）
+  // v1→v2 迁移播种来源：扫 messages/ 顶层群目录（目录 = 磁盘上出现过的群）。
+  // 构造期调用（此时 msgsDir 已 mkdir 好、尚无消息写入），一次 readdir 开销可忽略
+  _seedGroupDirs() {
+    try {
+      return fs.readdirSync(this.msgsDir, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name);
+    } catch {
+      return [];
+    }
+  }
+
+  // 启动恢复各群 lastSeen（data/state/lastSeen.json）：
+  // - v2 形状 {"byGroup": {...}}：逐群载入（键 String 归一，非数字值丢弃）；
+  // - 旧 v1 形状 {"lastSeenTs": n}（无 byGroup 字段）：迁移播种——msgsDir 下每个已知群
+  //   目录都按 n 起水位，并保留 _legacyV1=n 供本进程新出现的群回退（首次 set 落盘即转 v2）；
+  // - 文件缺失或解析失败一律按空（后果：backfill 起点退化为 now − maxHours，
+  //   即拉满补偿窗口，见 data-format.md §2）
   _loadLastSeen() {
     try {
       const f = this._lastSeenFile();
-      if (fs.existsSync(f)) {
-        this.lastSeenTs = JSON.parse(fs.readFileSync(f, 'utf8')).lastSeenTs ?? 0;
+      if (!fs.existsSync(f)) return;
+      const data = JSON.parse(fs.readFileSync(f, 'utf8'));
+      const byGroup = data.byGroup && typeof data.byGroup === 'object' ? data.byGroup : null;
+      if (byGroup) {
+        // v2 形状优先：即便文件里还残留 v1 的 lastSeenTs 冗余键也忽略（v2 更晚、覆盖 v1）
+        for (const [k, v] of Object.entries(byGroup)) {
+          if (typeof v === 'number') this.lastSeenByGroup.set(String(k), v);
+        }
+      } else if (typeof data.lastSeenTs === 'number') {
+        this._legacyV1 = data.lastSeenTs;
+        for (const name of this._seedGroupDirs()) this.lastSeenByGroup.set(name, data.lastSeenTs);
       }
     } catch {
-      this.lastSeenTs = 0;
+      /* 损坏一律按空 */
     }
   }
 
   /**
-   * 读全局最后在线时间（backfill 补偿拉取的起点水位，见 core/routing.js backfillHistory）。
-   * @returns {number} 秒级时间戳；从未在线/状态文件损坏时为 0
+   * 读某群最后在线时间（该群 backfill 补偿拉取的起点水位，见 core/routing.js
+   * backfillHistory）。群号以 String 归一——number/string 群号读写等价，跨重启不丢。
+   * @param {string|number} groupId - 群号
+   * @returns {number} 秒级时间戳；从未在线/状态文件缺失损坏为 0；v1 迁移后进程内
+   *   新出现的群回退旧单值
    */
-  getLastSeenTs() {
-    return this.lastSeenTs;
+  getLastSeenTs(groupId) {
+    return this.lastSeenByGroup.get(String(groupId)) ?? this._legacyV1 ?? 0;
   }
 
   /**
-   * 推进全局最后在线时间并落盘（内部取 max，单调不回退）。
-   * addMessage 每次落盘后都会调用；backfill 在整轮补偿结束后由 core/routing.js 统一调用
-   * （见 data-format.md §2「addMessage 与 backfill 写入」）。
+   * 推进某群最后在线时间并落盘（每群取 max，单调不回退；群间水位互不影响）。
+   * addMessage 每次落盘后都会调用；backfill 在该群整轮补偿结束后由 core/routing.js
+   * 按群调用（见 data-format.md §2「addMessage 与 backfill 写入」）。
+   * @param {string|number} groupId - 群号（String 归一存储）
    * @param {number} ts - 秒级时间戳（通常取刚落盘消息的 time）
    * @returns {void}
-   * 副作用: 覆盖写 data/state/lastSeen.json；写失败静默忽略，内存值已先行推进
+   * 副作用: 覆盖写 data/state/lastSeen.json（v2 {"byGroup"} 形状，含全部已记录群）；
+   *   写失败静默忽略，内存值已先行推进
    */
-  setLastSeenTs(ts) {
-    this.lastSeenTs = Math.max(this.lastSeenTs, ts);
+  setLastSeenTs(groupId, ts) {
+    const key = String(groupId);
+    const cur = this.lastSeenByGroup.get(key) ?? this._legacyV1 ?? 0;
+    this.lastSeenByGroup.set(key, Math.max(cur, ts));
     try {
-      fs.writeFileSync(this._lastSeenFile(), JSON.stringify({ lastSeenTs: this.lastSeenTs }));
+      fs.writeFileSync(this._lastSeenFile(), JSON.stringify({ byGroup: Object.fromEntries(this.lastSeenByGroup) }));
     } catch {
       /* 忽略 */
     }
@@ -296,8 +334,8 @@ export class MessageStore {
    * 落一条 backfill 拉回的历史消息（get_group_msg_history 的消息项）。字段命名兼容
    * 两种来源：message_id/msgId、time/msgTime、user_id/sender.user_id（详见
    * external-apis.md §1 响应形状）。无 id / 文本为空 / 内存已有 / 已写盘过 → 返回 null。
-   * 与 addMessage 不同：本方法不推进 lastSeenTs——历史补偿不应挪动在线水位，
-   * 由 core/routing.js 的 backfillHistory 在整轮结束后按最新一条统一 setLastSeenTs。
+   * 与 addMessage 不同：本方法不推进该群 lastSeen——历史补偿不应挪动在线水位，
+   * 由 core/routing.js 的 backfillHistory 在整轮结束后按该群最新一条统一 setLastSeenTs。
    * @param {string} groupId - 群号
    * @param {Object} msg - 历史消息对象（结构见 data-format.md §1 记录形状）
    * @returns {Object|null} 新记录；id 缺失/文本为空/重复时返回 null
@@ -325,14 +363,14 @@ export class MessageStore {
   }
 
   // 内部：两条落库路径共用的尾部（addMessage 实时事件 / addHistoryMessage 历史补偿）——
-  // 写前查重 → 登记内存态 → 学名片 → JSONL 追加；touchLastSeen=true 时推进 lastSeenTs
+  // 写前查重 → 登记内存态 → 学名片 → JSONL 追加；touchLastSeen=true 时推进该群 lastSeen
   // （addMessage 用；历史补偿不移在线水位，见 addHistoryMessage 的 JSDoc）
   _commit(groupId, g, rec, { touchLastSeen = false } = {}) {
     if (this.writtenIds.has(`${groupId}:${rec.id}`)) return null;
     g.messages.set(rec.id, rec);
     this.writtenIds.add(`${groupId}:${rec.id}`);
     this._learnUser(g, rec);
-    if (touchLastSeen) this.setLastSeenTs(rec.time);
+    if (touchLastSeen) this.setLastSeenTs(groupId, rec.time);
     const file = this._fileFor(groupId, localDate(rec.time * 1000));
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.appendFileSync(file, JSON.stringify(rec) + '\n');

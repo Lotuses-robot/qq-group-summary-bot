@@ -154,7 +154,7 @@ S# 编号保留为行为契约锚点（CLAUDE.md 红线与 refactor-proposal 保
 
 ### 6.1 离线补偿 backfillHistory（core/routing.js createRouting 内，connect 生命周期内，仅一次）
 
-`sinceTs = max(store.getLastSeenTs(), now − backfill.maxHours×3600)`（默认 72h）；群集合 = `config.groups` 非空用之，否则 `get_group_list`（失败回退磁盘已跟踪群）；每群 `get_group_msg_history(message_seq:0, count:1000)` → 过滤 `time ≥ sinceTs` 与批内重复 → 逐条 `store.addHistoryMessage`（与内存/磁盘双去重）+ `analytics.record`；整批有新增才 `setLastSeenTs(latest)`（全局单值，只增不减）；单群失败记日志继续。
+**每群独立起点** `sinceTs = max(该群 lastSeenTs, now − backfill.maxHours×3600)`（默认 72h 兜底；2026-09 修复坑 9：原为全局单值——单群拉取失败会把别群水位推高，该群缺口永远错过；现按群存储于 data/state/lastSeen.json 的 `{"byGroup"}`，群间互不钳制）；群集合 = `config.groups` 非空用之，否则 `get_group_list`（失败回退磁盘已跟踪群）；每群 `get_group_msg_history(message_seq:0, count:1000)` → 过滤 `time ≥ sinceTs` 与批内重复 → 逐条 `store.addHistoryMessage`（与内存/磁盘双去重）+ `analytics.record`；该群有新增才 `setLastSeenTs(gid, latest)`（每群只增不减）；单群失败记日志继续。
 
 ### 6.2 每日日报 dailyReport（report 插件，hooks.start 经 scheduler.start 注册每日回调，时刻取 `report.hour/minute`，缺省 9:00）
 
@@ -195,6 +195,6 @@ filter.js 零 import；plugins 间零互 import（服务一律经 createApp 注�
 6. **Summarizer 与 ChatBrain 的 LLM 默认值不同**：maxTokens 2048 vs 1024、temperature 0.7 vs 0.8、失败兜底文案仅 chat 有、仅 chat 有并发信号量（3）。LLM 两调用点与 moegirl 的 fetch 原**均无超时/重试**，2026-09 统一改经 core/platform/http.js fetchRetry（LLM 60s×2 次、moegirl 15s×1 次，仅网络错误/超时/5xx 重试，2xx/4xx 原样返回）；wiki/wikipedia 各自的超时/重试/反爬策略不变。
 7. **extractQuestion 只剥 1–2 段前导 @**：`内容 @机器人` 这类尾部/中部 @ 会原样进入问题文本；无空格紧贴 @ 的整串（如文本「@昵称问题…」）会被 `^@[^\s@]{1,30}\s*` 整体吞掉。
 8. **命令未命中也会进 LLM**：任何 @ 且非空文本，若各指令带与刷新/总结关键词都不命中，都会消耗一次 LLM 调用（chatEnabled:false 时不发不耗）。
-9. **lastSeenTs 是全局单值**（非按群），backfill 的起点由任一群的最后消息推进。
+9. ~~**lastSeenTs 是全局单值**（非按群），backfill 的起点由任一群的最后消息推进~~（2026-09 已修复）：现按群存储（`data/state/lastSeen.json` 的 `{"byGroup": {...}}`），backfill 每群独立起点 `max(该群水位, now−maxHours)`；旧 v1 单值形状启动时迁移播种到磁盘已知群目录（群号 String 归一存储）。修复动机：单群拉取失败时全局水位被其他群推高，失败群缺口永久错过。
 10. **node:sqlite 需 Node ≥22.5**：engines 已声明 ≥22.5（原 ≥18 过宽，2026-09 修复）。
 11. **总结关键词判定基准（既定语义，勿按旧行为回退）**：旧 S8 在剥 @ 前对**含 @ 的完整文本**判关键词（先于空 @ 判定）；现 summary 插件对**剥 @ 后问题文本**判（在 S10 之后）——详见 §4 要点。输入形态「紧贴 @ 无空格的整串且整串含关键词」（如文本「@PRTS总结」、at 段缺 name 时「@10001总结」）：旧代码触发手动总结，现代码回「艾特PRTS干什么呀喵」。**2026-09 决策：不回退**——有效文本必须与 @ 分隔，紧贴无空格的整串不应通过（更符合逻辑）；锁定测试在 test/smoke/runtime-dispatch.test.js（「紧贴 @ 无空格的整串不触发任何插件」）。剥 @ 后关键词仍完整（如「@机器人总结」被 `^@机器人\s*` 单独剥掉）时触发不受影响。

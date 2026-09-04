@@ -85,11 +85,13 @@ export function createRouting(options) {
 
   /**
    * 离线补偿拉取（§6.1；仅 WS connect 生命周期回调内执行一次，backfillDone 置位后不再跑）：
-   * sinceTs = max(全局 lastSeenTs, now − backfill.maxHours×3600)（默认 72h；lastSeenTs 是全局单值非按群，§8 坑 9）；
+   * 每群独立起点 sinceTs = max(该群 lastSeenTs, now − backfill.maxHours×3600)
+   * （默认 72h 兜底；2026-09 修复坑 9：原为全局单值——单群拉取失败会把别群水位推高，
+   * 该群缺口永远错过，现按群独立、互不钳制）；
    * 群集合 = trackedGroups 非空用之，否则 get_group_list（失败回退磁盘已跟踪群）；
    * 每群 get_group_msg_history(messageSeq:0, count:1000) → 过滤 time<sinceTs 与批内重复 id →
-   * addHistoryMessage（内存/磁盘双去重，仅返回真才算新增）→ analytics.record；整批有新增才 setLastSeenTs(latest)
-   * （只增不减）；单群失败记日志继续。
+   * addHistoryMessage（内存/磁盘双去重，仅返回真才算新增）→ analytics.record；
+   * 该群有新增才 setLastSeenTs(gid, latest)（只增不减）；单群失败记日志继续。
    *
    * @returns {Promise<void>}
    * 副作用：写消息存储/状态文件/SQLite（可能触发 analytics 首写全量导入，§8 坑 5）
@@ -99,12 +101,13 @@ export function createRouting(options) {
     state.backfillDone = true;
     const nowSec = Math.floor(Date.now() / 1000);
     const maxHours = backfillMaxHours;
-    const sinceTs = Math.max(store.getLastSeenTs(), nowSec - maxHours * 3600);
+    const maxAgo = nowSec - maxHours * 3600;
     const groups = trackedGroups().length > 0 ? trackedGroups() : await getAllGroupIds();
 
-    log(`[backfill] 启动后补偿拉取：自 ${fmtFull(new Date(sinceTs * 1000))} 起，共 ${groups.length} 个群`);
+    log(`[backfill] 启动后补偿拉取：共 ${groups.length} 个群（各群独立起点水位）`);
     for (const gid of groups) {
       try {
+        const sinceTs = Math.max(store.getLastSeenTs(gid), maxAgo);
         const resp = await client.getGroupMsgHistory(gid, { messageSeq: 0, count: 1000 });
         const msgs = resp?.messages ?? resp?.data ?? [];
         let added = 0;
@@ -125,8 +128,8 @@ export function createRouting(options) {
           if (!earliest || t < earliest) earliest = t;
           if (t > latest) latest = t;
         }
-        if (added > 0) store.setLastSeenTs(latest);
-        log(`[backfill] 群 ${gid} 补偿 ${added} 条离线消息${added ? `（最早 ${fmtFull(new Date(earliest * 1000))}）` : ''}`);
+        if (added > 0) store.setLastSeenTs(gid, latest);
+        log(`[backfill] 群 ${gid} 自 ${fmtFull(new Date(sinceTs * 1000))} 起补偿 ${added} 条离线消息${added ? `（最早 ${fmtFull(new Date(earliest * 1000))}）` : ''}`);
       } catch (e) {
         err(`[backfill] 群 ${gid} 拉取失败:`, e.message);
       }

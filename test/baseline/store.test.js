@@ -2,8 +2,8 @@
  * P0 行为基线：MessageStore 与纯文本工具（src/core/platform/store.js）。
  *
  * 锁定目标：JSONL 按群按天追加写、写入幂等闸、loadFromDisk 坏行去重重写、
- * lastSeen 全局单值只增不减、lastSummaryAt 持久化、collectSince/collectRange
- * 的窗口与排序语义——重构时这些文件级行为一字不许变。
+ * lastSeen 按群水位只增不减（v1 全局单值→v2 byGroup 迁移播种）、lastSummaryAt
+ * 持久化、collectSince/collectRange 的窗口与排序语义——重构时这些文件级行为一字不许变。
  *
  * 时间基准说明：测试固定用 2026-01-05 当地时间（new Date(y, m, d) 构造，
  * 与 store 内 localDate/hhmm 同为本地时区口径，跑在哪个时区都确定）。
@@ -85,7 +85,7 @@ describe('MessageStore 实时落盘（addMessage）', () => {
     const lines = fs.readFileSync(file, 'utf8').trimEnd().split('\n');
     assert.equal(lines.length, 1);
     assert.deepEqual(JSON.parse(lines[0]), rec);
-    assert.equal(store.getLastSeenTs(), DAY_TS); // addMessage 每次推进水位
+    assert.equal(store.getLastSeenTs(GID), DAY_TS); // addMessage 每次推进该群水位
     assert.deepEqual(store.trackedGroupIds(), [GID]);
 
     // 群成员名片缓存
@@ -156,27 +156,84 @@ describe('MessageStore 实时落盘（addMessage）', () => {
     assert.equal(fs.readFileSync(f2, 'utf8').trimEnd().split('\n').length, 1);
   });
 
-  it('lastSeenTs 全局单值、只增不减且落盘', (t) => {
+  it('lastSeen 按群推进：每群只增不减、群间互不钳制、落盘为 v2 byGroup 形状', (t) => {
     const dir = makeTmp();
     const store = new MessageStore(dir);
-    store.setLastSeenTs(500);
-    store.setLastSeenTs(400); // 回退被 max 钳住
-    assert.equal(store.getLastSeenTs(), 500);
+    store.setLastSeenTs('gA', 500);
+    store.setLastSeenTs('gA', 400); // 回退被 max 钳住
+    store.setLastSeenTs('gB', 700); // 别群水位不影响 gA
+    assert.equal(store.getLastSeenTs('gA'), 500);
+    assert.equal(store.getLastSeenTs('gB'), 700);
+    assert.equal(store.getLastSeenTs('gC'), 0); // 无记录群 = 0
+
+    const raw = JSON.parse(fs.readFileSync(path.join(dir, 'state', 'lastSeen.json'), 'utf8'));
+    assert.deepEqual(raw, { byGroup: { gA: 500, gB: 700 } }); // v2 形状（无 v1 冗余键）
 
     const store2 = new MessageStore(dir);
-    assert.equal(store2.getLastSeenTs(), 500); // 从 state/lastSeen.json 恢复
+    assert.equal(store2.getLastSeenTs('gA'), 500); // 从 state/lastSeen.json 恢复
+    assert.equal(store2.getLastSeenTs('gB'), 700);
   });
 
-  it('lastSeen/lastSummaryAt 状态文件损坏一律按 0 降级', (t) => {
+  it('lastSeen/lastSummaryAt 状态文件损坏一律按空/0 降级', (t) => {
     const dir = makeTmp();
     fs.mkdirSync(path.join(dir, 'state'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'state', 'lastSeen.json'), '{broken');
     fs.writeFileSync(path.join(dir, 'state', `${GID}.json`), '{{');
 
     const store = new MessageStore(dir);
-    assert.equal(store.getLastSeenTs(), 0);
+    assert.equal(store.getLastSeenTs(GID), 0);
     store.loadFromDisk(GID);
     assert.equal(store.getLastSummaryAt(GID), 0);
+  });
+});
+
+describe('MessageStore lastSeen 状态文件（v1→v2 迁移与损坏降级，2026-09 修复坑 9）', () => {
+  it('v1 旧形状 {"lastSeenTs": n}：按 messages 下已知群目录逐个播种，进程内新群回退旧单值', (t) => {
+    const dir = makeTmp();
+    // 旧版状态文件 + 两个磁盘上出现过的群目录（目录 = 迁移播种依据，无需含消息文件）
+    fs.mkdirSync(path.join(dir, 'messages', 'gA'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'messages', 'gB'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'state'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'state', 'lastSeen.json'), JSON.stringify({ lastSeenTs: 123456 }));
+
+    const store = new MessageStore(dir);
+    assert.equal(store.getLastSeenTs('gA'), 123456); // 旧单值播种到每个已知群
+    assert.equal(store.getLastSeenTs('gB'), 123456);
+    assert.equal(store.getLastSeenTs('gC'), 123456); // 进程内未知群回退旧单值（_legacyV1）
+
+    // 首写即转 v2 形状：已知群全量落盘（含未 set 过的播种群）
+    store.setLastSeenTs('gA', 130000);
+    const raw = JSON.parse(fs.readFileSync(path.join(dir, 'state', 'lastSeen.json'), 'utf8'));
+    assert.deepEqual(raw, { byGroup: { gA: 130000, gB: 123456 } });
+
+    // 重启后按 v2 恢复：目录外的群不再有回退值
+    const store2 = new MessageStore(dir);
+    assert.equal(store2.getLastSeenTs('gA'), 130000);
+    assert.equal(store2.getLastSeenTs('gB'), 123456);
+    assert.equal(store2.getLastSeenTs('gC'), 0);
+  });
+
+  it('群号 number/string 归一：数字群号跨重启水位不丢', (t) => {
+    const dir = makeTmp();
+    const store = new MessageStore(dir);
+    store.setLastSeenTs(12345, 800); // number 群号写入
+    assert.equal(store.getLastSeenTs('12345'), 800); // string 读取
+
+    const store2 = new MessageStore(dir); // 重启
+    assert.equal(store2.getLastSeenTs(12345), 800);
+    assert.equal(store2.getLastSeenTs('12345'), 800);
+  });
+
+  it('v2 畸形（值非数字）丢弃、合法值保留；v1 冗余键在 v2 形状存在时不回退', (t) => {
+    const dir = makeTmp();
+    fs.mkdirSync(path.join(dir, 'state'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'state', 'lastSeen.json'),
+      JSON.stringify({ byGroup: { gA: 'not-a-number', gB: 42 }, lastSeenTs: 7 }));
+
+    const store = new MessageStore(dir);
+    assert.equal(store.getLastSeenTs('gA'), 0); // 畸形值丢弃
+    assert.equal(store.getLastSeenTs('gB'), 42); // 合法值保留
+    assert.equal(store.getLastSeenTs('gC'), 0); // 不把 v1 冗余键当回退值
   });
 });
 
@@ -199,12 +256,12 @@ describe('MessageStore 历史落盘（addHistoryMessage，backfill 用）', () =
     assert.equal(r2.text, '历史二');
   });
 
-  it('不推进 lastSeenTs（历史补偿不动在线水位），缺 id/重复返回 null', (t) => {
+  it('不推进 lastSeen（历史补偿不动在线水位），缺 id/重复返回 null', (t) => {
     const dir = makeTmp();
     const store = new MessageStore(dir);
-    assert.equal(store.getLastSeenTs(), 0);
+    assert.equal(store.getLastSeenTs(GID), 0);
     store.addHistoryMessage(GID, { message_id: 'h1', time: DAY_TS, message: 'a' });
-    assert.equal(store.getLastSeenTs(), 0); // 与 addMessage 的关键差异
+    assert.equal(store.getLastSeenTs(GID), 0); // 与 addMessage 的关键差异
 
     assert.equal(store.addHistoryMessage(GID, { time: DAY_TS, message: '无id' }), null);
     store.addHistoryMessage(GID, { message_id: 'h2', time: DAY_TS, message: 'b' });

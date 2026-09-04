@@ -8,7 +8,7 @@
 data/
   messages/<群号>/<YYYY-MM-DD>.jsonl   消息记录（追加写，按群按天分片）
   state/<群号>.json                     每群最后概括时间
-  state/lastSeen.json                   全局最后在线时间（backfill 起点）
+  state/lastSeen.json                   各群最后在线时间（backfill 按群起点，v2 byGroup 形状）
   messages.db                           SQLite 分析层（messages + pulls 两表）
   lingo.json                            群友教出来的梗词典（可手动编辑）
   knowledge_cache.json                  知识检索缓存
@@ -38,7 +38,9 @@ data/
 ## 2. state 状态（JSON 覆盖写）
 
 - `state/<群号>.json` → `{"lastSummaryAt": <秒>}`——summary 插件在**发送成功后**才推进（`store.setLastSummaryAt`）；删除即下次从当前时段重新概括。
-- `state/lastSeen.json` → `{"lastSeenTs": <秒>}`——**全局单值、只增不减**；addMessage 与 backfill 写入；解析失败按 0（backfill 退化为拉满 `backfill.maxHours`）。
+- `state/lastSeen.json` → v2 形状 `{"byGroup": {"<群号>": <秒>}}`——**每群水位、只增不减、群间独立**（2026-09 修复坑 9：原为全局单值，单群 backfill 失败会把其他群水位推高、失败群缺口永久错过）；`addMessage` 每写一条都推进**该群**水位并全量覆盖写本文件，backfill 在该群整轮补偿结束后按群写入；**群号键统一 String 归一**（number/string 读写等价，跨重启不丢）。
+- 旧 v1 形状 `{"lastSeenTs": <秒>}`（2026-09 前版本遗留）：启动时**迁移播种**——按 `messages/` 下已有群目录逐个播种该单值，并保留进程内回退（本次启动新出现的群在首写 v2 前也按它起水位）；首次 `setLastSeenTs` 落盘即转 v2（播种过的群全量写进 `byGroup`）。
+- 解析失败按空（v2 各群按 0、迁移不播种）——backfill 退化为拉满 `backfill.maxHours`（默认 72h）；v2 形状存在时文件里残留的 v1 `lastSeenTs` 冗余键忽略不回退。
 
 ## 3. SQLite（data/messages.db，node:sqlite 同步接口）
 
