@@ -2,7 +2,7 @@
 
 > 本 bot 与外部系统交互的全部接口：NapCat（OneBot 11 WS）、LLM（OpenAI 兼容）、三个 Wiki（MediaWiki API 家族）、ArknightsGameData 下载。调试联调时对照本节。
 
-## 1. NapCat / OneBot 11（core/napcat.js）
+## 1. NapCat / OneBot 11（core/platform/napcat.js）
 
 **连接**：正向 WebSocket `ws://127.0.0.1:3001`（`napcat.wsUrl`），有 token 时拼 `?access_token=`。断线后 `reconnectDelay`(3s) 自动重连；`close()` 置 closed 标志后不再重连。**注意：无应用层心跳处理——心跳 meta_event 到达后因不含 lifecycle 分支被事件处理函数忽略。**
 
@@ -55,9 +55,9 @@ Authorization: Bearer {apiKey}
 | 话题门 | 仅方舟相关问题（`isArknightsRelated` 词表+关卡正则）才检索 | 无条件检索（萌娘命中方舟梗兜底 17 个主词条页） | 仅**非**方舟问题且 `enabled===true`（需代理） |
 | 并入上下文 | topK=3 | topK=2 | topK=2 |
 
-共享纯函数（core/wiki.js 导出，moegirl/wikipedia 检索器与 chat 插件复用）：`extractKeywords`（问句剥语气词）、`isArknightsRelated`。
+共享纯函数（core/knowledge/wiki.js 导出，moegirl/wikipedia 检索器与 chat 插件复用）：`extractKeywords`（问句剥语气词）、`isArknightsRelated`。
 
-## 4. ArknightsGameData 下载（core/refresher.js）
+## 4. ArknightsGameData 下载（core/platform/refresher.js）
 
 - 镜像源（按序 fallback）：jsDelivr CDN → GitHub raw。
 - 4 表：干员表 / 档案 / 藏品 / 卡池（`zh_CN/gamedata/excel/`）。

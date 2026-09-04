@@ -27,28 +27,28 @@ QQ 群聊机器人（NapCat / OneBot 11 / WS），Node ESM，LLM 生成群聊概
 
 来自 [docs/architecture.md](docs/architecture.md) §8 与 [docs/refactor-proposal.md](docs/refactor-proposal.md) 的探索结论：
 
-1. **路由链次序即契约**：S1–S7（消息入库 → @检测 → 静默门）与 S9/S10（剥 @、空@ 固定回复）在 core/runtime.js；其后的产品行为全部经 registry 分发带（priority 降序）：summary 900（总结关键词）→ refresh 800（刷新指令）→ 四个指令插件 700–400 → chat 300 末端恒消费（report/webui 仅 hooks 不占带）。任何"看起来更合理"的重排都可能改变现网行为；带序常量在 core/registry.js 的 `PRIORITY`（**测试锁定 keys，新增占带名须同步 registry 测试**）。
+1. **路由链次序即契约**：S1–S7（消息入库 → @检测 → 静默门）与 S9/S10（剥 @、空@ 固定回复）在 core/routing.js（P5 起自 runtime.js 拆出，runtime 装配期 createRouting 挂载，顺序与文案未改）；其后的产品行为全部经 registry 分发带（priority 降序）：summary 900（总结关键词）→ refresh 800（刷新指令）→ 四个指令插件 700–400 → chat 300 末端恒消费（report/webui 仅 hooks 不占带）。任何"看起来更合理"的重排都可能改变现网行为；带序常量在 core/registry.js 的 `PRIORITY`（**测试锁定 keys，新增占带名须同步 registry 测试**）。
 2. **消息入库是同步 `appendFileSync` 且先于一切路由**——不得异步化或加锁（现状：写失败中断该消息路由）。
 3. **@匹配语义**：at 段字符串全等；`@机器人`/`@PRTS` 大小写敏感子串匹配；剥 @ 只剥 1–2 段**前导**的，尾部 @ 原样保留。**关键词/指令判定统一基于剥 @ 后的有效文本**——紧贴 @ 无空格的整串（如 `@PRTS总结`）不触发任何指令/总结、落 S10 空@ 提示（既定语义，勿按旧「含 @ 全文判」回退）。
 4. **死配置不要修**：`schedule.hour/minute`、`report.hour` 从未生效（定时恒 9:00）。修它需要立项决策（见 refactor-proposal 待办，runtime.js 装配处已标 TODO 注释），别在路过时改。
 5. **语义保持**：知识缓存键 `q:<问题>` 跨群共享（勿加群号前缀）；`wsConnected` 断线不复位（面板状态假象，已知）；Summarizer 与 ChatBrain 的 LLM 默认值（maxTokens 2048/1024、temperature 0.7/0.8）与"无超时/无重试"现状别单方面"加固"。
 6. **指令 14 条规则顺序即优先级**：规则按域拆在 4 个指令插件（plugins/lingo.js 词典、ark.js 干员藏品、gacha.js 抽卡、stats.js 统计）——域内序 = 文件内代码序、域间序 = PRIORITY 带（700 > 600 > 500 > 400）。抽卡记录必须先于单抽；负向前瞻正则勿合并。
-7. **抽卡/干员/藏品的概率与过滤逻辑在 core/arkdb.js 内**，命令层（插件）只做格式化与落库；概率/可获取性改动需走游戏数据事实，不拍脑袋。
+7. **抽卡/干员/藏品的概率与过滤逻辑在 core/knowledge/arkdb.js 内**，命令层（插件）只做格式化与落库；概率/可获取性改动需走游戏数据事实，不拍脑袋。
 
 ## 功能扩展入口（现在长什么样，去哪儿加）
 
 - **新群指令**：先归领域 → 在对应指令插件内沿既有分隔段插入（域内代码序 = 优先级）：词典 → plugins/lingo.js、干员/藏品 → plugins/ark.js、抽卡 → plugins/gacha.js、统计 → plugins/stats.js。全新领域：新建 createXxxPlugin 工厂 + 加入 plugins/index.js 的 `commandPlugins` 数组 + 在 core/registry.js `PRIORITY` 加带（须同步 registry 测试对 keys 的断言）。
 - **整类消息判定（非指令）**：仿 summary/refresh/chat 插件写 handleMessage(ctx)（ctx = {groupId, userId, userName, text, lingo, arkdb, analytics}；返回 string = runtime 代发、true = 插件自驱、null = 让位）；描述符语义见 core/registry.js 头注释。
 - **新定时/后台流程**：在 core/runtime.js createApp 的插件装配段就地构造 createXxxPlugin({依赖闭包}) 并 register（hooks.start 注册定时/调度，hooks.stop 清理）；后台服务依赖注入与就绪标志模式见 plugins/report.js。
-- **新知识源 / 调整检索编排**：plugins/chat.js 的 `ChatBrain.chat()` 主流程（本地快路 → 缓存 → 联网检索 → 排序 → `_reply`）；检索器本体按惯例放 core/ 并由 runtime 装配为共享单例注入。
-- **新本地数据表**：core/arkdb.js 读 + core/refresher.js 下载/校验；数据文件约定见 [docs/data-format.md](docs/data-format.md)。
+- **新知识源 / 调整检索编排**：plugins/chat.js 的 `ChatBrain.chat()` 主流程（本地快路 → 缓存 → 联网检索 → 排序 → `_reply`）；检索器本体按惯例放 core/knowledge/ 并由 runtime 装配为共享单例注入。
+- **新本地数据表**：core/knowledge/arkdb.js 读 + core/platform/refresher.js 下载/校验；数据文件约定见 [docs/data-format.md](docs/data-format.md)。
 - **面板新接口**：plugins/webui.js（零依赖 node:http，页面内联）。
-- **@机器人 人设与回复规则**：plugins/chat.js 的 system prompt 与 core/summarizer.js 的两套 prompt。
+- **@机器人 人设与回复规则**：plugins/chat.js 的 system prompt 与 core/platform/summarizer.js 的两套 prompt。
 
 ## 结构方向（重要）
 
-重构（P0–P3，2026-09 落地，方案存档见 [docs/refactor-proposal.md](docs/refactor-proposal.md)）已完成：**core 主运行库 + PluginRegistry + plugins**。
-- core/ = 平台与公共服务（napcat/store/summarizer/scheduler/analytics/refresher/filter/logger + 知识单例 lingo/arkdb/cache/wiki/moegirl/wikipedia）+ registry.js（分发带）+ runtime.js（createApp 唯一装配者、S1–S7/S9/S10 路由链、生命周期）。
+重构（P0–P3，2026-09 落地，方案存档见 [docs/refactor-proposal.md](docs/refactor-proposal.md)）已完成，P5 再对 core 子目录归类并把 S 链判定拆到 core/routing.js：**core 主运行库 + PluginRegistry + plugins**。
+- core/ 顶层 = 装配与判定三件：runtime.js（createApp 唯一装配者 + 生命周期 + main）、registry.js（分发带）、routing.js（S1–S7/S9/S10 判定链 + backfill，P5 自 runtime.js 拆出）；core/platform/ = 平台服务与基础设施（napcat/store/summarizer/scheduler/analytics/refresher/filter/logger）；core/knowledge/ = 知识单例（lingo/arkdb/cache/wiki/moegirl/wikipedia）。
 - plugins/ = 9 个插件：4 指令（lingo/ark/gacha/stats）+ summary/refresh/report（后台流程）+ chat（LLM 兜底）+ webui（面板）；插件间零互 import，服务一律经 createApp 注入。
 
 约束：

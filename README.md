@@ -37,12 +37,13 @@
 ```
 src/
   index.js      引导入口（import { main }，按入口判定执行）
-  core/         主运行库：平台 + 公共服务 + 插件注册表 + 唯一装配者（原 src/ 平铺模块迁入）
-    runtime.js    createApp(config, overrides) 纯装配 + 消息路由链（core 判定 + 插件分发带）+ start/stop 生命周期
+  core/         主运行库：装配层（顶层）+ platform/(平台服务) + knowledge/(知识单例)（原 src/ 平铺模块迁入）
+    runtime.js    createApp(config, overrides) 纯装配 + start/stop 生命周期 + main()
     registry.js   插件注册表（按优先级带分发消息 / hooks 起停插件）
-    napcat.js / store.js / summarizer.js / scheduler.js / analytics.js / refresher.js
-    filter.js / logger.js
-    lingo.js / arkdb.js / cache.js / wiki.js / moegirl.js / wikipedia.js   知识服务共享单例
+    routing.js    S1–S13 消息路由判定链 + 离线补偿（P5 自 runtime.js 拆出，装配期挂载）
+    platform/     napcat.js / store.js / summarizer.js / scheduler.js / analytics.js / refresher.js
+                  filter.js / logger.js
+    knowledge/    lingo.js / arkdb.js / cache.js / wiki.js / moegirl.js / wikipedia.js   知识服务共享单例
   plugins/      功能插件（互不 import；服务一律经 createApp 注入）
     lingo.js / ark.js / gacha.js / stats.js   确定性指令（原 commands.js 按领域拆）
     summary.js / refresh.js / report.js   手动总结 / 数据刷新 / 每日日报（后台流程插件）
@@ -240,4 +241,4 @@ Register-ScheduledTask -TaskName "QQSummaryBot" -Action $action -Trigger $trigge
 
 - 摘要内容由 LLM 生成，仅供群内成员参考，不作为事实依据。
 - 聊天记录保存在本地 `data/` 目录，请妥善保管，注意隐私。
-- 敏感内容过滤依赖内置关键词/正则规则（见 `src/core/filter.js`），请按需调整。
+- 敏感内容过滤依赖内置关键词/正则规则（见 `src/core/platform/filter.js`），请按需调整。
