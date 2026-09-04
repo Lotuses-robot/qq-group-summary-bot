@@ -6,7 +6,9 @@
  * commands.js 的 14 条线性规则顺序（域内序 + 域间 priority 带），见各插件文件头注释。
  *
  * 对外导出：commandPlugins（4 个插件描述符数组）；实例化点：core/runtime.js createApp。
- * P3 起 summary/refresh/chat 等插件并入本清单（或独立清单）——注册机制已就位。
+ * P3b 起后台/服务插件（summary/refresh/report/chat/webui）不随本数组交付——它们依赖 runtime
+ * 闭包内的服务实例、配置派生量与就绪标志，在 createApp 装配期经各 createXxxPlugin(deps)
+ * 就地构造后统一 register（注册机制已就位）。
  */
 import { createLingoPlugin } from './lingo.js';
 import { createArkPlugin } from './ark.js';

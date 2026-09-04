@@ -37,7 +37,10 @@ const EXPECTED_EXPORTS = {
   'plugins/gacha.js': ['createGachaPlugin'],
   'plugins/index.js': ['commandPlugins'],
   'plugins/lingo.js': ['createLingoPlugin'],
+  'plugins/report.js': ['createReportPlugin'],
+  'plugins/refresh.js': ['createRefreshPlugin'],
   'plugins/stats.js': ['createStatsPlugin'],
+  'plugins/summary.js': ['createSummaryPlugin'],
 };
 
 describe('模块导入冒烟', () => {

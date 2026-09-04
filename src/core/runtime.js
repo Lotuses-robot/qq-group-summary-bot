@@ -1,11 +1,12 @@
 /*
  * 运行时装配与编排（core 主运行库入口；P1 由 src/index.js 拆出）。
  *
- * 职责：唯一装配者 + 消息路由链 + 三个后台编排流程（原 index.js 全文迁移，行为一字不改）：
+ * 职责：唯一装配者 + 消息路由链 + 生命周期编排（原 index.js 全文迁移，行为一字不改）：
  * 平台/服务实例（MessageStore/NapCatClient/Summarizer/Scheduler/Analytics/DataRefresher +
- * lingo/arkdb/cache/wiki/moegirl/wikipedia 知识服务共享单例）都在 createApp 内装配，注入
- * ChatBrain（plugins/chat，P3 构造注入）；路由链 S1–S13 与 refreshData/backfillHistory/
- * dailyReport 同址迁移。WebUI 按 webui.enabled 条件装配（P3 收尾后并入插件）。
+ * lingo/arkdb/cache/wiki/moegirl/wikipedia 知识服务共享单例）都在 createApp 内装配；
+ * P3b 起手动总结/数据刷新/每日日报三个后台流程迁入 plugins/ 插件（summary/refresh/report，
+ * 经 registry 分发带与 hooks.start 启定时器/调度），本文件只留 backfillHistory（WS connect
+ * 一次性离线补偿）与 S1–S13 路由链骨架。WebUI 按 webui.enabled 条件装配（P3c 收尾后并入插件）。
  *
  * 拆分动机（docs/refactor-proposal.md）：index.js 原是「加载即启动」——import 即读
  * config、建连接、起定时器，无法被测试/工具 import。现 createApp(config, overrides)
@@ -34,6 +35,9 @@ import { WikiRetriever } from './wiki.js';
 import { MoegirlRetriever } from './moegirl.js';
 import { WikipediaRetriever } from './wikipedia.js';
 import { ChatBrain } from '../plugins/chat.js';
+import { createSummaryPlugin } from '../plugins/summary.js';
+import { createRefreshPlugin } from '../plugins/refresh.js';
+import { createReportPlugin } from '../plugins/report.js';
 import { WebUI } from '../webui.js';
 import { commandPlugins } from '../plugins/index.js';
 import { PluginRegistry } from './registry.js';
@@ -80,79 +84,6 @@ export function createApp(config, overrides = {}) {
   const wikipedia = overrides.wikipedia || new WikipediaRetriever(llm);
   const brain = overrides.brain || new ChatBrain({ cfg: llm, lingo, arkdb, cache, wiki, moegirl, wikipedia });
 
-  // 插件注册表（P2）：登记 commandPlugins（4 个确定性指令插件）；实际分发次序由各插件
-  // priority 决定（lingo 700 > ark 600 > gacha 500 > stats 400，域内规则顺序即优先级，
-  // 见 plugins/*.js 头注释——旧 commands.js 14 条线性规则的等价编排）。S12 段经
-  // registry.dispatch 走插件，服务句柄随每次消息 ctx 注入；P3 起更多插件并入本表。
-  const registry = new PluginRegistry();
-  for (const p of commandPlugins) registry.register(p);
-
-  /**
-   * 数据自动/手动刷新编排（architecture §6.3）：三个触发源共用同一函数——启动定时器 / 群指令 S11 / WebUI POST /api/refresh。
-   * 先快照旧 6★/5★ 干员与卡池 id（走 arkdb 公开快照 API）→ refresher.refresh()
-   * （依次 干员→档案→藏品→卡池；ETag 304 跳过、结构校验失败抛错）→ 有更新则
-   * arkdb.reload() 热重载并 diff 出新增干员/新开放卡池 → 按 dataRefresh.announce 组「【数据更新播报】」。
-   *
-   * @param {string|null} [notifyGroupId=null] - 群指令触发时传群号：必向该群回执「【数据更新】…」结果消息
-   *  （另在 announce===true 时附播报）；为 null（定时器/WebUI 触发）时仅当 announce===true 把播报广播给全部跟踪群
-   * @returns {Promise<string>} 「【数据更新】…」结果文本（供群回执与 WebUI /api/refresh 复用）
-   * 副作用：联网下载写盘 data/ark/（原子写入+旧文件 .bak 备份）、arkdb 内存热重载、可能群发播报；发送失败吞掉只记日志
-   */
-  // 定期更新本地数据库（ArknightsGameData），带新增内容播报
-  async function refreshData(notifyGroupId = null) {
-    log('[refresh] 开始更新本地数据...');
-
-    // 快照旧数据（用于新增播报对比；走公开快照 API，不再直读 characters/_isOperator/gachaPools）
-    const oldHighOps = new Map(arkdb.snapshotHighOps().map((o) => [o.id, o.name]));
-    const oldPoolIds = new Set(arkdb.snapshotGachaPools().map((p) => p.gachaPoolId));
-
-    const { updated, unchanged, failed } = await refresher.refresh();
-
-    let announce = '';
-    if (updated.length > 0) {
-      arkdb.reload();
-      log('[refresh] 内存数据已重新加载');
-
-      // 对比新增内容
-      const new6 = [];
-      const new5 = [];
-      for (const c of arkdb.snapshotHighOps()) {
-        if (!oldHighOps.has(c.id)) {
-          if (c.rarity === 'TIER_6') new6.push(c.name);
-          else if (c.rarity === 'TIER_5') new5.push(c.name);
-        }
-      }
-      const now = Math.floor(Date.now() / 1000);
-      const newPools = [];
-      for (const p of arkdb.snapshotGachaPools()) {
-        if (!oldPoolIds.has(p.gachaPoolId) && (!p.openTime || p.openTime <= now) && (!p.endTime || p.endTime >= now)) {
-          newPools.push(p.gachaPoolName);
-        }
-      }
-      const parts = [];
-      if (new6.length) parts.push(`新增 6★ 干员：${new6.join('、')}`);
-      if (new5.length) parts.push(`新增 5★ 干员：${new5.join('、')}`);
-      if (newPools.length) parts.push(`新开放卡池：${[...new Set(newPools)].join('、')}`);
-      if (parts.length) announce = `【数据更新播报】\n${parts.join('\n')}`;
-    }
-
-    const msg = `【数据更新】\n成功：${updated.length ? updated.join('、') : '无'}\n未变化：${unchanged.length ? unchanged.join('、') : '无'}\n${failed.length ? '失败：' + failed.join('、') : '全部成功'}`;
-    if (notifyGroupId) {
-      client.sendGroupMsg(notifyGroupId, msg).catch((e) => err(`[refresh] 通知发送失败:`, e.message));
-      if (announce && config.dataRefresh?.announce === true) {
-        client.sendGroupMsg(notifyGroupId, announce).catch(() => {});
-      }
-    } else if (announce && config.dataRefresh?.announce === true) {
-      // 自动更新时向所有监控群播报新增内容（默认关闭，需 announce: true 显式开启）
-      const targets = trackedGroups().length ? trackedGroups() : store.trackedGroupIds();
-      for (const gid of targets) {
-        client.sendGroupMsg(gid, announce).catch(() => {});
-      }
-      log('[refresh] 已向群聊播报新增内容');
-    }
-    return msg;
-  }
-
   // 群路由相关配置常量（自 config.json 派生；groups 空数组 = 跟踪全部群）
   const trackedGroups = () => (Array.isArray(config.groups) ? config.groups : []);
   const tracksGroup = (id) => trackedGroups().length === 0 || trackedGroups().includes(id);
@@ -181,11 +112,44 @@ export function createApp(config, overrides = {}) {
   const filterMessages = (recs) => (filterEnabled ? filterMessagesRaw(recs) : { kept: recs, filtered: [] });
 
   // 生命周期内可变的运行时状态：selfId（初始取配置，connect 后以 get_login_info 回填）、
-  // ready（WS 就绪锚点）、backfillDone（离线补偿仅执行一次）、summaryInFlight（同群概括防重入）
+  // ready（WS 就绪锚点）、backfillDone（离线补偿仅执行一次）
   let selfId = config.napcat.selfId || 0;
   let ready = false;
   let backfillDone = false;
-  const summaryInFlight = new Set();
+
+  // 插件注册（P3 唯一装配点）：P2 四指令（commandPlugins 静态交付）+ P3b 后台/服务插件
+  // （依赖本闭包内的服务实例、配置派生量与就绪标志 → 在 createApp 内就地构造，不随静态数组）。
+  // 分发次序由 priority 带决定：summary 900 = 原 S8 手动总结、refresh 800 = 原 S11 手动刷新、
+  // 指令 700–400、report 仅 hooks（priority 0 无消息面）。P3c：chat/webui 并入本表。
+  const registry = new PluginRegistry();
+  const summaryPlugin = createSummaryPlugin({
+    store, summarizer, client, filterMessages,
+    minMessages,
+    manualCmds,
+    isReady: () => ready,
+  });
+  const refreshPlugin = createRefreshPlugin({
+    arkdb, refresher, client, store, trackedGroups,
+    broadcast: config.dataRefresh?.announce === true,
+    schedule: config.dataRefresh || {},
+  });
+  const reportPlugin = createReportPlugin({
+    store, client, summarizer, scheduler, filterMessages,
+    trackedGroups, getAllGroupIds,
+    reportUserId, reportMinMessages,
+    isReady: () => ready,
+  });
+  for (const p of [...commandPlugins, summaryPlugin, refreshPlugin, reportPlugin]) registry.register(p);
+
+  /**
+   * 数据更新编排公共入口（桥接层；P3b 起正文归 refresh 插件的 api.refresh——自动定时器/S11/WebUI
+   * 三触发源共用同一 runner，见 plugins/refresh.js。本包装仅为 app 返回面与 WebUI ctx 保持旧句柄）。
+   * @param {string|null} [notifyGroupId=null] - 透传 refresh 插件（同插件 JSDoc）
+   * @returns {Promise<string>} 「【数据更新】…」结果文本
+   */
+  function refreshData(notifyGroupId = null) {
+    return refreshPlugin.api.refresh(notifyGroupId);
+  }
 
   // 预载「今天」窗口到内存（§3 步骤 4）：groups 为空数组时什么都不预载；日报/概括按需另载日期段
   for (const gid of trackedGroups()) {
@@ -223,91 +187,7 @@ export function createApp(config, overrides = {}) {
   }
 
   /**
-   * 手动总结入口（S8，调用方 fire-and-forget 不 await）：ready 未就绪直接忽略；同群已有概括在跑
-   * （summaryInFlight 集合）时忽略重复指令。
-   *
-   * @param {string|number} groupId - 群号
-   * @param {Object} [opts={}] - 透传选项；当前函数体未读取，仅保留调用形状（此处不顺手改）
-   * @returns {Promise<void>} 完成或忽略；调用方以 .catch 记录异常
-   * 副作用：可能经 doSummary 群发概括消息并推进 lastSummaryAt
-   */
-  async function triggerSummary(groupId, opts = {}) {
-    if (!ready) return;
-    if (summaryInFlight.has(groupId)) {
-      log(`[group ${groupId}] 已有概括进行中，忽略重复指令`);
-      return;
-    }
-    summaryInFlight.add(groupId);
-    try {
-      await doSummary(groupId, opts);
-    } finally {
-      summaryInFlight.delete(groupId);
-    }
-  }
-
-  /**
-   * 概括执行体：起点 = 上次 lastSummaryAt（无记录回退最近 1 小时）→ collectSince 收集 → 依次过三守卫
-   * （无消息 / 少于 minMessages / 敏感过滤后为空）任一命中即跳过 → summarizer.summarize(...,'manual')
-   * → 发送成功才推进 lastSummaryAt（失败不推进，下次重跑仍覆盖同一时段）。
-   *
-   * @param {string|number} groupId - 群号
-   * @param {Object} [opts={}] - 透传保留（当前函数体未读取）
-   * @returns {Promise<void>} 生成完成或中途跳过
-   * 副作用：群发概括消息；发送成功后写 state（store.setLastSummaryAt）
-   */
-  async function doSummary(groupId, opts = {}) {
-    const nowSec = Math.floor(Date.now() / 1000);
-    let since = store.getLastSummaryAt(groupId);
-    if (!since) since = nowSec - 60 * 60;
-
-    const recs = store.collectSince(groupId, since);
-    if (recs.length === 0) {
-      log(`[group ${groupId}] 该时段无消息，跳过概括`);
-      return;
-    }
-    if (recs.length < minMessages) {
-      log(`[group ${groupId}] 消息数(${recs.length})少于 minMessages(${minMessages})，跳过`);
-      return;
-    }
-
-    const { kept, filtered } = filterMessages(recs);
-    if (kept.length === 0) {
-      log(`[group ${groupId}] 该时段消息均含敏感内容，跳过概括`);
-      return;
-    }
-    if (filtered.length > 0) {
-      log(`[group ${groupId}] 已过滤 ${filtered.length} 条敏感/隐私消息`);
-    }
-
-    const span = `从 ${fmtFull(new Date(since * 1000))} 到 ${fmtFull(new Date(recs[recs.length - 1].time * 1000))}`;
-    log(`[group ${groupId}] 开始概括 ${kept.length} 条消息 (${span})`);
-
-    const summary = await summarizer.summarize(groupId, kept, span, 'manual');
-    const msg = `【群聊概括】\n${span}｜共 ${kept.length} 条消息\n\n${summary}`;
-
-    await client.sendGroupMsg(groupId, msg);
-    // 边界点：发送成功后才推进 lastSummaryAt（失败不写 → 下次重跑仍覆盖同一时段）
-    store.setLastSummaryAt(groupId, nowSec);
-    log(`[group ${groupId}] 概括已发送`);
-  }
-
-  /**
-   * 日报标题用群名查询：get_group_info 失败或无群名时回退群号字符串，不向外抛。
-   *
-   * @param {string|number} groupId - 群号
-   * @returns {Promise<string>} 群名或 String(groupId)
-   */
-  async function getGroupName(groupId) {
-    try {
-      const info = await client.getGroupInfo(groupId);
-      return info?.group_name || String(groupId);
-    } catch {
-      return String(groupId);
-    }
-  }
-
-  /**
-   * 群集合（backfill/日报在 config.groups 为空数组时使用）：优先 get_group_list 拉全量；
+   * 群集合（backfill/日报插件在 config.groups 为空数组时使用）：优先 get_group_list 拉全量；
    * 空结果或调用失败回退 store 已跟踪群（磁盘记录的群）。
    *
    * @returns {Promise<Array<number|string>>} 群号列表
@@ -372,68 +252,6 @@ export function createApp(config, overrides = {}) {
     }
   }
 
-  /**
-   * 每日日报编排（§6.2；scheduler 每日 9:00 的回调）：守卫 ready 与 report.userId（未配置则跳过）；
-   * 口径 = 昨日本地自然日 [昨日00:00, 今日00:00) —— 每群 loadFromDisk(gid, yesterdayStart, todayStart) 载入
-   * 该日期段再 collectRange + 敏感过滤，消息数 ≥ reportMinMessages(100) 才算活跃群 → 逐群 summarize(...,'daily')
-   *（单群失败继续），全部失败则不发送；成功则私聊发给 report.userId。全程不写 lastSummaryAt/lastSeen 状态。
-   *
-   * @returns {Promise<void>}
-   * 副作用：私聊发送日报消息
-   */
-  async function dailyReport() {
-    if (!ready) return;
-    if (!reportUserId) {
-      log('[report] 未配置 report.userId，跳过日报');
-      return;
-    }
-
-    const now = new Date();
-    const yesterdayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime() / 1000;
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000;
-    const yesterdayLabel = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate() - 1).padStart(2, '0')}`;
-
-    const groups = trackedGroups().length > 0 ? trackedGroups() : await getAllGroupIds();
-    const activeGroups = [];
-
-    for (const gid of groups) {
-      store.loadFromDisk(gid, yesterdayStart, todayStart);
-      const recs = store.collectRange(gid, yesterdayStart, todayStart);
-      const { kept, filtered } = filterMessages(recs);
-      if (filtered.length > 0) {
-        log(`[report] 群 ${gid} 已过滤 ${filtered.length} 条敏感/隐私消息`);
-      }
-      if (kept.length >= reportMinMessages) activeGroups.push({ gid, recs: kept });
-    }
-
-    if (activeGroups.length === 0) {
-      log(`[report] 昨日(${yesterdayLabel})无活跃群（≥${reportMinMessages}条），跳过`);
-      return;
-    }
-
-    log(`[report] 昨日(${yesterdayLabel})活跃群 ${activeGroups.length} 个，正在生成日报...`);
-    const parts = [];
-    for (const { gid, recs } of activeGroups) {
-      try {
-        const name = await getGroupName(gid);
-        const summary = await summarizer.summarize(gid, recs, yesterdayLabel, 'daily');
-        parts.push(`【${name}】${recs.length} 条消息\n${summary}`);
-        log(`[report] 群 ${gid}(${name}) 日报已生成`);
-      } catch (e) {
-        err(`[report] 群 ${gid} 日报失败:`, e.message);
-      }
-    }
-
-    if (parts.length === 0) {
-      log('[report] 所有群日报生成失败，跳过发送');
-      return;
-    }
-
-    const msg = `【昨日群聊日报 ${yesterdayLabel}】\n共 ${parts.length} 个活跃群\n\n${parts.join('\n\n---\n\n')}`;
-    await client.sendPrivateMsg(reportUserId, msg);
-    log(`[report] 日报已私聊发送给 ${reportUserId}`);
-  }
-
   // 事件路由链 S1–S13（architecture §4）：收到任意 WS 事件按序逐条判定，命中即 return；
   // 注意 S5「入库先于一切」——非 @、静默时段的消息也照常入库计数，只是不回复
   client.onEvent((event) => {
@@ -486,14 +304,8 @@ export function createApp(config, overrides = {}) {
       return;
     }
 
-    // S8 手动总结关键词：对「含 @ 的完整文本」做 includes 判定（默认 总结、/总结、#总结），
-    // 命中即 fire-and-forget 触发 triggerSummary 并 return
-    if (manualCmds.some((c) => cmd.includes(c))) {
-      log(`[group ${event.group_id}] 收到手动总结指令 (@机器人)`);
-      triggerSummary(event.group_id, { manual: true }).catch((e) => err('手动总结失败:', e.message));
-      return;
-    }
-
+    // S8 手动总结关键词：P3b 已迁 summary 插件（priority 900）——文本含总结关键词时由分发带内
+    // 最先的插件认领并异步触发概括，路由此处不再单独判定（见 plugins/summary.js）。
     // S9 剥前导 @ 得到问题文本
     const question = extractQuestion(rec, true);
     // S10 纯 @（问题为空）：回「@昵称 艾特PRTS干什么呀喵」提示并 return
@@ -504,21 +316,11 @@ export function createApp(config, overrides = {}) {
       return;
     }
 
-    // S11 数据刷新指令：整串锚定（非包含匹配），先 ack「正在更新…」再异步 refreshData(gid)，失败补发错误消息
-    // 手动刷新本地数据（联网更新 ArknightsGameData）
-    if (/^(刷新数据|更新数据|更新数据库)$/.test(question)) {
-      log(`[group ${event.group_id}] 收到数据刷新指令`);
-      client.sendGroupMsg(event.group_id, '正在更新本地数据库，稍候…').catch(() => {});
-      refreshData(event.group_id).catch((e) => {
-        err('[refresh] 手动刷新失败:', e.message);
-        client.sendGroupMsg(event.group_id, `数据更新失败：${e.message}`).catch(() => {});
-      });
-      return;
-    }
-
-    // S12 确定性指令分发（registry + commandPlugins：词典学习/干员查询/藏品查询/统计/
-    // 抽卡等，带群与用户上下文）：dispatch 返回严格 null 才算未命中 → 落到 S13 LLM 兜底；
-    // 返回 true 表示插件已自行处理（当前 4 个指令插件都回文案，无 true 分支，仅防 P3 插件引入）
+    // S11 数据刷新指令：P3b 已迁 refresh 插件（priority 800，整串锚定正则 + ack + 异步执行，
+    // 见 plugins/refresh.js）——路由不再单独判定，同 S8 一并由分发带认领。
+    // S12 确定性分发（registry 全量插件：summary 900/refresh 800 原 S8/S11 带 + 指令插件 700–400，
+    // 带群与用户上下文）：dispatch 返回 string 才发送；true = 插件自驱已处理（总结/刷新异步
+    // 进行、调用方不 await）；null = 无人认领 → 落 S13 LLM 兜底
     const senderName = event.sender?.card || event.sender?.nickname || '群友';
     const cmdReply = registry.dispatch({
       lingo: lingo,
@@ -562,37 +364,29 @@ export function createApp(config, overrides = {}) {
 
   /**
    * 启动（全部启动副作用在此，createApp 本身不碰网络/定时器）：
-   * 注册数据自动刷新定时器（仅 dataRefresh.enabled !== false 时）→ 挂退出信号 →
-   * client.connect() 建 WS → scheduler.start 排下一个 9:00 日报 → 按 webui.enabled 起面板。
+   * 挂退出信号 → registry.startAll（P3b：refresh 数据自动更新定时器 + report 每日 9:00 调度
+   * 在此启动——原 start 内 setTimeout 段与 scheduler.start(dailyReport) 已迁插件 hooks）→
+   * client.connect() 建 WS → 按 webui.enabled 起面板（P3c 后并入插件）。
    * @returns {void}
    */
   function start() {
-    // 数据自动刷新定时器（§3 步骤 3）：注册先于 client.connect()；仅 dataRefresh.enabled !== false
-    // 时启用（默认开：首次 firstDelayMinutes(30) 分钟后，此后每 intervalHours(24) 小时；与 S11/WebUI 共用 refreshData）
-    const dr = config.dataRefresh || {};
-    if (dr.enabled !== false) {
-      const firstMs = (dr.firstDelayMinutes ?? 30) * 60 * 1000;
-      const intervalMs = (dr.intervalHours ?? 24) * 3600 * 1000;
-      setTimeout(() => {
-        refreshData().catch((e) => err('[refresh] 更新失败:', e.message));
-        setInterval(() => refreshData().catch((e) => err('[refresh] 更新失败:', e.message)), intervalMs);
-      }, firstMs);
-      log(`[refresh] 数据定期更新已启用：首次 ${dr.firstDelayMinutes ?? 30} 分钟后，此后每 ${dr.intervalHours ?? 24} 小时`);
-    }
-
-    // 生命周期收尾：先停每日定时器（防退出前再触发），再关 WS（置 closed 后不再重连），随后退出进程
+    // 生命周期收尾（注册先于一切启动副作用）：registry.stopAll 逆序停插件（report 先停每日
+    // 调度器、refresh 再清自动更新定时器——顺序与旧实现 scheduler→client 一致），再关 WS，
+    // 随后退出进程
     for (const sig of ['SIGINT', 'SIGTERM']) {
       process.on(sig, () => {
         log('收到退出信号，正在关闭...');
-        scheduler.stop();
-        client.close();
+        stop();
         process.exit(0);
       });
     }
 
-    // 启动收尾（§3 步骤 6）：connect 异步建 WS；scheduler.start 只排下一个 9:00，不会立即跑日报
+    // 后台插件启动（§3 步骤 3+6）：refresh hooks.start 注册数据自动更新定时器（先于 connect，
+    // 与旧顺序相同；仅 dataRefresh.enabled !== false 时启用）→ report hooks.start 排下一个 9:00
+    registry.startAll();
+
+    // 启动收尾：connect 异步建 WS（置 closed 后不再重连）
     client.connect();
-    scheduler.start(dailyReport);
 
     // Web 管理面板
     if (config.webui?.enabled !== false) {
@@ -608,9 +402,9 @@ export function createApp(config, overrides = {}) {
     log('QQ 群聊概括机器人已启动（仅 @ 触发总结；每日 9:00 发送昨日日报）');
   }
 
-  /** 优雅停服（退出信号与测试共用）：停日报定时器 + 关 WS；不 exit（信号路径自行 exit） */
+  /** 优雅停服（退出信号与测试共用）：registry.stopAll（report 停调度、refresh 清定时器）→ 关 WS；不 exit（信号路径自行 exit） */
   function stop() {
-    scheduler.stop();
+    registry.stopAll();
     client.close();
   }
 
