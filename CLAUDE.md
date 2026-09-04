@@ -11,8 +11,8 @@ QQ 群聊机器人（NapCat / OneBot 11 / WS），Node ESM，LLM 生成群聊概
 
 - 运行环境：**Node ≥ 22.5**（用了 `node:sqlite`；`package.json` engines ≥18 偏宽，勿信）。
 - 依赖仅 `ws`；`npm install` 后 `npm start`（= `node src/index.js`）。
-- 无 `npm test`（仓库零测试脚手架，见 [docs/refactor-proposal.md](docs/refactor-proposal.md) P0 提议）。
-- 改动语法自检：`node --check src/<file>.js`。
+- `npm test`：node:test 全量 = `node --test "test/**/*.test.js"`——`test/baseline/` 行为基线（store/analytics/lingo/arkdb/commands 直测）+ `test/smoke/`（导入面/注册表/插件接线/全链冒烟）。改了路由链、插件、存储语义就跑全量；纯文档/注释改动可跳过。
+- 改动语法自检：`node --check src/<file>.js`（core/ 与 plugins/ 同）。
 - 启动需要 `config.json` 里 `llm.apiKey`（或 `LLM_API_KEY` 环境变量），缺失即 exit(1)；连不上 NapCat 只打重连日志不退出。
 - 改代码前必读：[docs/architecture.md](docs/architecture.md)（§4 消息路由链、§6 三个后台流程、§8 已知坑）。
 
@@ -27,29 +27,36 @@ QQ 群聊机器人（NapCat / OneBot 11 / WS），Node ESM，LLM 生成群聊概
 
 来自 [docs/architecture.md](docs/architecture.md) §8 与 [docs/refactor-proposal.md](docs/refactor-proposal.md) 的探索结论：
 
-1. **路由链次序即契约**：消息入库 → @检测 → 静默门 → 总结关键词 → 空@回复 → 刷新指令 → 确定性指令（**严格 null 才落 chat**）→ chat 兜底。任何"看起来更合理"的重排都可能改变现网行为。
+1. **路由链次序即契约**：S1–S7（消息入库 → @检测 → 静默门）与 S9/S10（剥 @、空@ 固定回复）在 core/runtime.js；其后的产品行为全部经 registry 分发带（priority 降序）：summary 900（总结关键词）→ refresh 800（刷新指令）→ 四个指令插件 700–400 → chat 300 末端恒消费（report/webui 仅 hooks 不占带）。任何"看起来更合理"的重排都可能改变现网行为；带序常量在 core/registry.js 的 `PRIORITY`（**测试锁定 keys，新增占带名须同步 registry 测试**）。
 2. **消息入库是同步 `appendFileSync` 且先于一切路由**——不得异步化或加锁（现状：写失败中断该消息路由）。
 3. **@匹配语义**：at 段字符串全等；`@机器人`/`@PRTS` 大小写敏感子串匹配；剥 @ 只剥 1–2 段**前导**的，尾部 @ 原样保留。
-4. **死配置不要修**：`schedule.hour/minute`、`report.hour` 从未生效（定时恒 9:00）。修它需要立项决策（见 refactor-proposal 待办），别在路过时改。
-5. **语义保持**：知识缓存键 `q:<问题>` 跨群共享（勿加群号前缀）；`wsConnected` 断线不复位（面板状态假象，已知）；Summarizer 与 ChatBot 的 LLM 默认值（maxTokens 2048/1024、temperature 0.7/0.8）与"无超时/无重试"现状别单方面"加固"。
-6. **commands.js 的 14 条规则顺序即优先级**（抽卡记录必须先于单抽；负向前瞻正则勿合并）。
-7. **抽卡/干员/藏品的概率与过滤逻辑在 arkdb.js 内**，命令层只做格式化与落库；概率/可获取性改动需走游戏数据事实，不拍脑袋。
+4. **死配置不要修**：`schedule.hour/minute`、`report.hour` 从未生效（定时恒 9:00）。修它需要立项决策（见 refactor-proposal 待办，runtime.js 装配处已标 TODO 注释），别在路过时改。
+5. **语义保持**：知识缓存键 `q:<问题>` 跨群共享（勿加群号前缀）；`wsConnected` 断线不复位（面板状态假象，已知）；Summarizer 与 ChatBrain 的 LLM 默认值（maxTokens 2048/1024、temperature 0.7/0.8）与"无超时/无重试"现状别单方面"加固"。
+6. **指令 14 条规则顺序即优先级**：规则按域拆在 4 个指令插件（plugins/lingo.js 词典、ark.js 干员藏品、gacha.js 抽卡、stats.js 统计）——域内序 = 文件内代码序、域间序 = PRIORITY 带（700 > 600 > 500 > 400）。抽卡记录必须先于单抽；负向前瞻正则勿合并。
+7. **抽卡/干员/藏品的概率与过滤逻辑在 core/arkdb.js 内**，命令层（插件）只做格式化与落库；概率/可获取性改动需走游戏数据事实，不拍脑袋。
 
 ## 功能扩展入口（现在长什么样，去哪儿加）
 
-- **新群指令**：`src/commands.js` 的 `tryCommand`——沿既有分隔段按域插入，遵守顺序约束。
-- **新知识源 / 调整检索编排**：`src/chat.js` 的 `chat()` 主流程（本地快路 → 缓存 → 联网检索 → 排序 → `_reply`）。
-- **新本地数据表**：`src/arkdb.js` 读 + `src/refresher.js` 下载/校验；数据文件约定见 [docs/data-format.md](docs/data-format.md)。
-- **面板新接口**：`src/webui.js`（零依赖 node:http，页面内联）。
-- **@机器人 人设与回复规则**：chat.js 的 system prompt 与 summarizer.js 的两套 prompt。
+- **新群指令**：先归领域 → 在对应指令插件内沿既有分隔段插入（域内代码序 = 优先级）：词典 → plugins/lingo.js、干员/藏品 → plugins/ark.js、抽卡 → plugins/gacha.js、统计 → plugins/stats.js。全新领域：新建 createXxxPlugin 工厂 + 加入 plugins/index.js 的 `commandPlugins` 数组 + 在 core/registry.js `PRIORITY` 加带（须同步 registry 测试对 keys 的断言）。
+- **整类消息判定（非指令）**：仿 summary/refresh/chat 插件写 handleMessage(ctx)（ctx = {groupId, userId, userName, text, lingo, arkdb, analytics}；返回 string = runtime 代发、true = 插件自驱、null = 让位）；描述符语义见 core/registry.js 头注释。
+- **新定时/后台流程**：在 core/runtime.js createApp 的插件装配段就地构造 createXxxPlugin({依赖闭包}) 并 register（hooks.start 注册定时/调度，hooks.stop 清理）；后台服务依赖注入与就绪标志模式见 plugins/report.js。
+- **新知识源 / 调整检索编排**：plugins/chat.js 的 `ChatBrain.chat()` 主流程（本地快路 → 缓存 → 联网检索 → 排序 → `_reply`）；检索器本体按惯例放 core/ 并由 runtime 装配为共享单例注入。
+- **新本地数据表**：core/arkdb.js 读 + core/refresher.js 下载/校验；数据文件约定见 [docs/data-format.md](docs/data-format.md)。
+- **面板新接口**：plugins/webui.js（零依赖 node:http，页面内联）。
+- **@机器人 人设与回复规则**：plugins/chat.js 的 system prompt 与 core/summarizer.js 的两套 prompt。
 
 ## 结构方向（重要）
 
-本仓库当前是"平铺模块 + index.js 上帝文件"。**已有一份完整的 core+插件重构提案**（[docs/refactor-proposal.md](docs/refactor-proposal.md)）：目标架构、行为保真清单、P0–P4 迁移路线、风险清单均已设计完毕，**但尚未实施**。约束：
+重构（P0–P3，2026-09 落地，方案存档见 [docs/refactor-proposal.md](docs/refactor-proposal.md)）已完成：**core 主运行库 + PluginRegistry + plugins**。
+- core/ = 平台与公共服务（napcat/store/summarizer/scheduler/analytics/refresher/filter/logger + 知识单例 lingo/arkdb/cache/wiki/moegirl/wikipedia）+ registry.js（分发带）+ runtime.js（createApp 唯一装配者、S1–S7/S9/S10 路由链、生命周期）。
+- plugins/ = 9 个插件：4 指令（lingo/ark/gacha/stats）+ summary/refresh/report（后台流程）+ chat（LLM 兜底）+ webui（面板）；插件间零互 import，服务一律经 createApp 注入。
 
-- 不要在无讨论的情况下启动大规模结构重构或目录搬家；
-- 新增功能时**不必**为了未来插件化而提前抽象——按当前惯例写进对应模块即可（重构时会整体迁移）；
-- 若你发现"为加一个小功能必须改动 index.js 路由链 + commands.js 分发表"的摩擦，这正是提案要解决的问题——提醒用户看提案，而不是自己临时发明注册机制。
+约束：
+
+- 不要在无讨论的情况下启动大规模结构改动（core/plugins 边界的移动会牵动注入面与测试）；
+- 新增功能时**不必**为未来抽象提前设计——指令/后台流程按当前惯例写进对应插件与装配段即可；
+- 若你发现"为加一个小功能必须动 runtime 路由链 + registry 分发语义"，先对照 refactor-proposal 剩余待办讨论，而不是临时发明第二套注册机制；
+- 独立待办（死配置修复、LLM 无超时/重试加固、wsConnected 复位、engines 修正）尚未立项，别顺手修——见 refactor-proposal「待办」。
 
 ## 仓库约定
 

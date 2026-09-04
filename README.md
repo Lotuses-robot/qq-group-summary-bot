@@ -36,24 +36,21 @@
 
 ```
 src/
-  index.js      主入口（事件分发 + 定时任务编排）
-  napcat.js     OneBot 11 正向 WebSocket 客户端
-  store.js      消息存储 / 持久化 / 时段提取
-  summarizer.js LLM（OpenAI 兼容接口）概括器
-  chat.js       AI 群聊（带上下文记忆 + 三级知识库 + 本地干员库）
-  wiki.js       PRTS.Wiki 检索器（MediaWiki API）
-  moegirl.js    萌娘百科检索器（社区梗/黑话 + 通用 ACG 百科）
-  wikipedia.js  维基百科检索器（可选，通用知识源）
-  arkdb.js      本地干员数据库（干员信息/生日/档案 + 语义模糊匹配）
-  lingo.js      本地梗词典（可维护 + 群友纠错学习）
-  cache.js      知识缓存（加速重复提问）
-  commands.js   确定性任务指令（查干员/查藏品/抽卡/统计等）
-  analytics.js  SQLite 消息分析层（活跃榜/群统计/抽卡记录）
-  refresher.js  数据定期更新（ArknightsGameData 下载 + 校验 + 热重载）
-  webui.js      Web 管理面板（状态/词典/刷新/配置）
-  scheduler.js  定时调度器
-  filter.js     敏感内容过滤
-  logger.js     日志
+  index.js      引导入口（import { main }，按入口判定执行）
+  core/         主运行库：平台 + 公共服务 + 插件注册表 + 唯一装配者（原 src/ 平铺模块迁入）
+    runtime.js    createApp(config, overrides) 纯装配 + 消息路由链（core 判定 + 插件分发带）+ start/stop 生命周期
+    registry.js   插件注册表（按优先级带分发消息 / hooks 起停插件）
+    napcat.js / store.js / summarizer.js / scheduler.js / analytics.js / refresher.js
+    filter.js / logger.js
+    lingo.js / arkdb.js / cache.js / wiki.js / moegirl.js / wikipedia.js   知识服务共享单例
+  plugins/      功能插件（互不 import；服务一律经 createApp 注入）
+    lingo.js / ark.js / gacha.js / stats.js   确定性指令（原 commands.js 按领域拆）
+    summary.js / refresh.js / report.js   手动总结 / 数据刷新 / 每日日报（后台流程插件）
+    chat.js      AI 群聊（ChatBrain）+ LLM 兜底分发
+    webui.js     Web 管理面板（状态/词典/刷新/配置）
+test/           node:test 测试（npm test）
+  baseline/     行为基线（重构前直测 store/analytics/lingo/arkdb/commands 语义）
+  smoke/        import 面 / 注册表 / 插件接线 / 全链集成冒烟
 config.example.json  配置模板（脱敏，可提交仓库）
 config.json          实际配置（含密钥，已被 .gitignore 排除）
 start_bot.bat        Windows 快捷启动脚本
@@ -129,12 +126,12 @@ curl -o data/ark/gacha_table.json \
 > 仓库提供 `lingo.example.json` 词典模板（含常用干员绰号、方舟梗、知名 UP 主等 38 条），
 > 可复制到 `data/lingo.json` 使用。`data/` 目录已被 `.gitignore` 排除，你的本地词典不会误传。
 > 新增梗时向词典加一条 `"梗名": "解释"` 即可（重启 bot 生效）。
-- `schedule`：日报任务时间（`hour`/`minute`，默认 9:00）
+- `schedule`：⚠️ **死配置**——`hour`/`minute` 从未生效，日报实际恒 9:00（详见 [docs/config-reference.md](docs/config-reference.md)）
 - `minMessages`：手动总结低于该消息条数时跳过
 - `report`：日报配置
   - `userId`：日报私聊接收人 QQ 号（**必填**）
   - `minMessages`：昨日消息数达到该值的群才生成日报（默认 100）
-  - `hour`：日报发送时间（默认 9 点）
+  - `hour`：⚠️ **死配置**（恒 9:00，同上；仅为历史兼容读取，无实际效果）
 - `quiet`：静默时段（默认 `enabled: true, start: 0, end: 8`，即 0:00-8:00 不响应总结；设 `enabled: false` 可关闭）
 - `backfill`：离线补偿（`maxHours` 默认 72，为 lastSeen 的兜底上限；实际从上次下线的 lastSeen 时刻开始补偿）
 - `dataRefresh`：数据定期更新（`enabled` 默认 true，`intervalHours` 默认 24，`firstDelayMinutes` 默认 30，`announce` 默认 false 关闭新增播报）
@@ -148,6 +145,8 @@ curl -o data/ark/gacha_table.json \
 npm install
 npm start
 ```
+
+开发验证：`npm test`（node:test 全量——行为基线 + 冒烟，无第三方测试依赖）。
 
 Windows 下也可直接双击 `start_bot.bat`（后台运行，日志写入 `logs/` 目录，按天轮转）。
 
@@ -241,4 +240,4 @@ Register-ScheduledTask -TaskName "QQSummaryBot" -Action $action -Trigger $trigge
 
 - 摘要内容由 LLM 生成，仅供群内成员参考，不作为事实依据。
 - 聊天记录保存在本地 `data/` 目录，请妥善保管，注意隐私。
-- 敏感内容过滤依赖内置关键词/正则规则（见 `src/filter.js`），请按需调整。
+- 敏感内容过滤依赖内置关键词/正则规则（见 `src/core/filter.js`），请按需调整。

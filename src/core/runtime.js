@@ -69,6 +69,8 @@ export function createApp(config, overrides = {}) {
     accessToken: config.napcat.accessToken || '',
   });
   const summarizer = overrides.summarizer || new Summarizer(llm);
+  // TODO(死配置，见 refactor-proposal.md 待办)：config.schedule.hour/minute 从未生效——Scheduler
+  // 只解构 dailyHour/dailyMinute（config 里没人写这两个键），日报恒 9:00。修复需立项决策，勿顺手改。
   const scheduler = overrides.scheduler || new Scheduler(config.schedule || {});
   const analytics = overrides.analytics || new Analytics(path.join(dataDir, 'messages.db'), path.join(dataDir, 'messages'));
   const refresher = overrides.refresher || new DataRefresher(path.join(dataDir, 'ark'), config.dataRefresh || {});
@@ -96,7 +98,9 @@ export function createApp(config, overrides = {}) {
   const startedAt = Date.now();
   let wsConnected = false;
 
-  // 日报配置（report.*）：userId 私聊收件人、minMessages 活跃群消息门槛（默认 100）
+  // 日报配置（report.*）：userId 私聊收件人、minMessages 活跃群消息门槛（默认 100）。
+  // TODO(死配置，同 refactor-proposal.md 待办)：report.hour 从未生效——下行 dailyHour 是无消费方
+  // 的遗读（report 插件只注入 userId/minMessages，触发时刻恒 9:00 由 Scheduler 缺省），勿顺手删/改。
   const report = config.report || {};
   const reportUserId = report.userId || 0;
   const reportMinMessages = report.minMessages ?? 100;

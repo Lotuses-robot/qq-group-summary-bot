@@ -1,79 +1,88 @@
-# 重构提案：「core 主运行库 + 插件注册 + 插件」（未实施）
+# 重构提案（存档）：「core 主运行库 + 插件注册 + 插件」
 
-> **状态：提案存档**。目标架构与迁移路线已完成设计与代码级探索（2026-09），但**尚未实施**、未获批准。当前仓库仍是平铺结构。
-> 此文档的价值：① 记录结构改造的完整思路；② 保存探索得到的行为保真清单与已知坑（与 architecture.md §8 互补）；③ 作为未来立项的需求说明书。
+> **状态：已实施**。P0–P3 迁移路线已于 2026-09 按本设计落地（P4 收尾同步文档）；本文档保留为**决策记录**：
+> 目标架构与实施记录、行为保真清单（改造红线）、已知坑（与 architecture.md §8 互补）、仍开放的独立待办。
+> 改结构前先读本节；行为红线以 CLAUDE.md 与 architecture.md §8 为准。
 
-## 现状痛点
+## 现状痛点（改造动机，已解决）
 
 1. `src/index.js`（449 行）上帝文件：平台（WS/事件）与产品（总结/日报/刷新播报/回填）揉在一起，消息路由是写死的 if-else 链（S1–S13），加功能必须改这条链。
 2. `commands.js` 150 行大 if-else 分发表，横跨 5 领域、14 条规则，带顺序敏感约束（"抽卡记录"必须先于"单抽"）。
 3. `ChatBot`（chat.js）三职合一：LLM 聊天器 + 检索编排器 + **服务宿主**——LingoStore/ArkDB/KnowledgeCache/三个 Wiki 检索器全在它构造内 `new`，被 commands/webui/index 反向借用（`chatBot.lingo`、`chatBot.arkdb`）。
 
-## 目标架构
+## 目标架构（= 实施后现状）
 
 ```
 src/
-  index.js            # 引导：import { main } from './core/runtime.js'; main();
-  core/               # 主运行库：平台+公共服务+注册表+装配（不 import 任何 plugins）
-    runtime.js        # main() / createApp(config, overrides)——测试注入点
-    registry.js       # 插件注册表：register/getRegistry/dispatch/startAll/stopAll
+  index.js            # 引导（17 行）：import { main } 按入口判定执行
+  core/               # 主运行库：平台+公共服务+注册表+装配者 runtime.js（唯一 import 插件工厂的例外）
+    runtime.js        # createApp(config, overrides)——纯装配/测试注入点；main()；S1–S7/S9/S10 路由链
+    registry.js       # 插件注册表 + PRIORITY 带常量：register/dispatch/startAll/stopAll
     napcat.js store.js analytics.js summarizer.js scheduler.js refresher.js
     filter.js logger.js lingo.js arkdb.js cache.js wiki.js moegirl.js wikipedia.js
-  plugins/            # 功能插件：声明式自注册（插件间零互 import）
-    lingo/ ark/ gacha/ stats/      # 4 指令插件（原 commands.js 按领域拆）
-    summary/ report/ refresh/ chat/ webui/
-test/                 # node:test（无新依赖），先写基线再重构
+  plugins/            # 功能插件（扁平文件式；互不 import）
+    index.js          # commandPlugins 装配清单
+    lingo.js ark.js gacha.js stats.js        # 4 指令插件（原 commands.js 按领域拆）
+    summary.js report.js refresh.js chat.js webui.js   # 后台/服务插件
+test/                 # node:test（无新依赖）：baseline/（行为基线）+ smoke/（冒烟）
 ```
 
 **插件描述符**：`{ name, priority, enabled, handleMessage(ctx) → string|true|null, hooks:{start,stop}, api }`。
 
 **分发语义**：按 priority 降序（稳定排序）逐插件同步调用，`string` → 发送并短路、`true` → 已处理短路、`null/undefined` → 继续；**不 await 任何返回值**（异步插件自驱 Promise 链，保持现状 fire-and-forget 时序）。
 
-**优先级带**：summary 900 > refresh 800 > lingo 700 > ark 600 > gacha 500 > stats 400 > chat 300（report/webui 仅 hooks）。把原 if-else 链顺序编码为确定性；core 管线保留：事件过滤 → 入库 → @检测 → 静默门 → extractQuestion → 空@固定回复。
+**优先级带**：summary 900 > refresh 800 > lingo 700 > ark 600 > gacha 500 > stats 400 > chat 300（report/webui 仅 hooks、priority 0）。把原 if-else 链顺序编码为确定性；core 管线保留：事件过滤 → 入库 → @检测 → 静默门 → extractQuestion → 空@固定回复。
 
-## 行为保真清单（探索结论，改造红线）
+## 行为保真清单（改造红线，P4 复核仍全部成立）
 
 - 消息入库 + analytics.record 先于一切；非 @、静默时段消息照常入库。
 - @检测：at 段字符串全等 + 文本`@selfId` + 子串`@机器人/@PRTS`。
-- 静默吞掉全部 @ 行为；手动总结关键词对**完整文本**（ctx.text）includes 判定。
+- 静默吞掉全部 @ 行为；手动总结关键词对问题文本 includes 判定（**差异见下方 P3b 记录**）。
 - 空 @ → 固定回复「@sender 艾特PRTS干什么呀喵」（core，分发前）。
-- 指令严格 `null` 才落 chat；chat 不 await；`setLastSummaryAt` 在发送成功后；抽卡记录在回复前落库；chat 历史只在 LLM 成功后写。
+- chat 恒在分发带末端（原「严格 null 才落 chat」内化，行为不变）；chat 不 await；`setLastSummaryAt` 在发送成功后；抽卡记录在回复前落库；chat 历史只在 LLM 成功后写。
 - cache key `q:<question>` 跨群共享；知识缓存 set 在 LLM 调用前。
-- refreshData 三触发源共用同一 runner；日报口径=昨日自然日、先 loadFromDisk 再 collectRange、不写状态；backfill 仅 connect 时一次、lastSeen 只增不减。
-- Summarizer vs ChatBot 的 LLM 默认值差异（maxTokens 2048/1024、temperature 0.7/0.8、有无信号量）保持。
+- refreshData 三触发源共用同一 runner（refresh 插件 api.refresh）；日报口径=昨日自然日、先 loadFromDisk 再 collectRange、不写状态；backfill 仅 connect 时一次、lastSeen 只增不减。
+- Summarizer vs ChatBrain 的 LLM 默认值差异（maxTokens 2048/1024、temperature 0.7/0.8、有无信号量）保持。
 
-## 关键设计决定
+## 关键设计决定（实施记录 + 与设计的差异）
 
-- **服务上移**：LingoStore/ArkDB/KnowledgeCache/Wiki/Moegirl/Wikipedia/Summarizer/Refresher 由 runtime 装配为 core 单例注入；ChatBot 改造为 ChatBrain（plugins/chat），构造注入、14 步 chat() 流程逐字迁移不重排；groupHistory/groupSpeakers 留在 brain 实例。
-- **ArkDB 补 3 个公开方法**（纯增量）：`snapshotHighOps()` / `isOperator(c)` / `snapshotGachaPools()`——refresh 插件的 diff 对比不再直读私有字段与 `_isOperator`。
-- **纯函数借道不动**：summarizer→store(hhmm)、moegirl/wikipedia→wiki(extractKeywords) 四文件整体平移进 core/ 同目录，相对 import 一字不改。
-- **config 键名/schema 完全不动**；仅新增可选 `plugins.<name>.enabled`（默认全开）。
-- **14 条指令正则按域整段搬移、禁止合并**；跨插件无前缀碰撞（已逐对验证），"每条规则最短命中文本恰被一个插件 claim"写成防回归测试。
+- **服务上移**：LingoStore/ArkDB/KnowledgeCache/Wiki/Moegirl/Wikipedia/Summarizer/Refresher 由 runtime 装配为 core 共享单例注入；ChatBot 改造为 ChatBrain（plugins/chat.js），构造注入、14 步 chat() 流程逐字迁移未重排；groupHistory/groupSpeakers 留在 brain 实例。✅ 已按此实施。
+- **ArkDB 补 3 个公开方法**（纯增量）：`snapshotHighOps()` / `isOperator(c)` / `snapshotGachaPools()`——refresh 插件的 diff 对比不再直读私有字段与 `_isOperator`。✅
+- **纯函数借道不动**：summarizer→store(hhmm)、moegirl/wikipedia→wiki(extractKeywords) 随文件整体平移进 core/，相对 import 一字未改。✅
+- **config 键名/schema 完全不动**；原设计「新增可选 `plugins.<name>.enabled`（默认全开）」**未实施**（注册表描述符支持 enabled 字段、运行时未映射 config——需要时按此键补即可）。⚠️ 差异
+- **14 条指令正则按域整段搬移、未合并**；跨插件无前缀碰撞（已逐对验证）。✅ 域内序 = 文件内代码序、域间序 = PRIORITY 带。
+- **report/webui 仅 hooks、priority 0**（不占 300/200 带）：无消息面却要参与 startAll 排序的场景归 0 带，handleMessage 恒 null；registry 测试断言 PRIORITY keys，新增占带名须同步测试。✅
+- **core/ 不 import 任何 plugins** ⚠️ 未完全达成：runtime.js（装配者，位于 core/）必须 import 各插件工厂——这是唯一豁免，插件侧仍零 core 服务 import（只 import logger/registry 常量/wiki 纯函数/store 工具）。
 
-## 迁移路线（每阶段独立 commit、可运行可验证）
+## P3 期间发现的行为差异（保真清单补充，勿当 bug 顺手修）
 
-| 阶段 | 内容 | 验证 |
-|---|---|---|
-| P0 | 测试先行：node:test + 直测旧 `commands.tryCommand`/store/analytics/lingo/arkdb 的行为基线 | `npm test` 全绿 |
-| P1 | 14 文件 git mv 进 core/；arkdb 补公开方法；registry 骨架；index.js 拆 main() 进 runtime.js（createApp 注入点） | 基线绿 + 冒烟 + 默认路径核对（仍指根 data/） |
-| P2 | 4 指令插件 + registry dispatch 替换路由段；git rm commands.js | 命令基线改走插件断言文本原样 |
-| P3 | summary/report/refresh/chat/webui 五插件（可拆 3 小步）；git rm chat.js/webui.js | 基线绿 + 真机冒烟五路径 |
-| P4 | README 更新 + 死配置 TODO + 收尾 | 全量测试 + 端到端验收 |
+- **总结关键词判定基准**（P3b 引入）：旧 S8 在剥 @ 前对**含 @ 的完整文本**判关键词、先于空 @ 判定；现 summary 插件对**剥 @ 后问题文本**判、在 S10 之后。常规「@机器人 总结」（带空格/@ 段后另起文本）等价；差异仅出现在**无空白紧贴 @ 的一整串**且整串含关键词（如文本「@PRTS总结」、at 段缺 name 时「@10001总结」）：旧代码触发手动总结，现代码整串被 extractQuestion 吞掉 → 回「艾特PRTS干什么呀喵」。触发面窄但属实，修复需立项（改判定基准回剥 @ 前 / 调整 extract 段边界，均触及红线）——详见 architecture.md §8 坑 11。
 
-## 风险清单（迁移时逐条对照）
+## 迁移路线（已全部执行；每阶段独立 commit、可运行可验证）
 
-1. store 同步 IO 热路径不得异步化（routing 测试断言 jsonl 行数=事件数）
-2. summary 的 per-group 互斥 Set 随插件走，勿放全局
+| 阶段 | 内容 | 验证 | 状态 |
+|---|---|---|---|
+| P0 | 测试先行：node:test + 直测旧 `commands.tryCommand`/store/analytics/lingo/arkdb 的行为基线 | `npm test` 全绿（93 用例） | ✅ 完成（commit 1a3f138） |
+| P1 | 14 文件 git mv 进 core/；arkdb 补公开方法；registry 骨架；index.js 拆 main() 进 runtime.js（createApp 注入点） | 基线绿 + 冒烟 + 默认路径核对（仍指根 data/） | ✅ 完成（0079e9e） |
+| P2 | 4 指令插件 + registry dispatch 替换路由段；git rm commands.js | 命令基线改走插件断言文本原样 | ✅ 完成（ce1e1f0） |
+| P3 | summary/report/refresh/chat/webui 五插件（P3a chat / P3b 后台三件 / P3c webui + 分发带收尾）；git rm chat.js/webui.js | 基线绿 + 冒烟 134 例 + **真机冒烟五路径待用户执行** | ✅ 完成（1724822/f98d760/42b5192） |
+| P4 | README 更新 + 死配置 TODO + 收尾 | 全量测试 + 端到端验收 | ✅ 文档收尾完成；端到端真机验收待用户 |
+
+## 风险清单（迁移时逐条对照，P4 复核）
+
+1. store 同步 IO 热路径不得异步化（routing 测试断言 jsonl 行数=事件数）——已由 baseline 直测锁定
+2. summary 的 per-group 互斥 Set 随插件走，勿放全局——已随 summary 插件（background-plugins 测试锁定）
 3. cache 跨群键语义勿"顺手加群号前缀"
 4. chat 历史 pushMessage 位置保持在 LLM 成功之后
-5. gacha 记录先于单抽、负向前瞻正则勿合并
-6. extractQuestion 只剥 1–2 前导 @，尾部 @ 原样入 chat——勿"修复"
-7. 手动总结按 ctx.text 判（防漏尾部 @ 消息）
-8. 空@回复与关键词检查的旧序差异仅当关键词含 @ 时出现 → README 注明
-9. core/ 下移后默认路径核对（`__dirname/..` 仍指根 data/）
+5. gacha 记录先于单抽、负向前瞻正则勿合并（gacha 插件内）
+6. extractQuestion 只剥 1–2 前导 @，尾部 @ 原样入 chat——勿"修复"（连带 §P3 差异项）
+7. 手动总结按 ctx.text 判（防漏尾部 @ 消息）——**注意其与旧 S8 完整文本判的残余差异，见 P3 差异记录**
+8. 空@回复与关键词检查的旧序差异仅当关键词含 @ 时出现 → README/architecture 已注明
+9. core/ 下移后默认路径核对（`__dirname/..` 仍指根 data/）——P1 已核对
 10. 注册顺序 + 稳定排序须确定性（registry 测试）
 
-## 待办（与重构无强耦合，可独立立项）
+## 待办（与重构无强耦合，可独立立项；P4 收尾后仍开放）
 
-- **死配置修复**：`schedule.hour/minute` 与 `report.hour` 从未生效（Scheduler 只读 `dailyHour/dailyMinute`），日报恒 9:00——修复需决策"让哪个键生效"并保持默认 9:00。
-- **加固**：Summarizer 与 ChatBot 的 LLM 调用、moegirl fetch 均无 HTTP 超时/重试；wsConnected 断线不复位（面板状态假象）；首次 SQLite 导入同步阻塞；`package.json` engines(≥18) 与 node:sqlite(≥22.5) 不符。
+- **死配置修复**：`schedule.hour/minute` 与 `report.hour` 从未生效（Scheduler 只读 `dailyHour/dailyMinute`），日报恒 9:00——修复需决策"让哪个键生效"并保持默认 9:00（runtime.js 装配处已标 TODO 注释；README 已如实标注死配置）。
+- **总结关键词判定基准对齐**（P3b 差异，见上「P3 期间发现的行为差异」）：需立项决策后小改 core 路由或 extractQuestion 语义。
+- **加固**：Summarizer 与 ChatBrain 的 LLM 调用、moegirl fetch 均无 HTTP 超时/重试；wsConnected 断线不复位（面板状态假象）；首次 SQLite 导入同步阻塞；`package.json` engines(≥18) 与 node:sqlite(≥22.5) 不符。

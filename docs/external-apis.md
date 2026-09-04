@@ -2,7 +2,7 @@
 
 > 本 bot 与外部系统交互的全部接口：NapCat（OneBot 11 WS）、LLM（OpenAI 兼容）、三个 Wiki（MediaWiki API 家族）、ArknightsGameData 下载。调试联调时对照本节。
 
-## 1. NapCat / OneBot 11（src/napcat.js）
+## 1. NapCat / OneBot 11（core/napcat.js）
 
 **连接**：正向 WebSocket `ws://127.0.0.1:3001`（`napcat.wsUrl`），有 token 时拼 `?access_token=`。断线后 `reconnectDelay`(3s) 自动重连；`close()` 置 closed 标志后不再重连。**注意：无应用层心跳处理——心跳 meta_event 到达后因不含 lifecycle 分支被事件处理函数忽略。**
 
@@ -22,7 +22,7 @@
 
 ## 2. LLM（OpenAI 兼容 /chat/completions）
 
-两个调用点（Summarizer 与 ChatBot 各自独立 fetch，**都无 HTTP 超时/重试**）：
+两个调用点（Summarizer 与 ChatBrain 各自独立 fetch，**都无 HTTP 超时/重试**）：
 
 ```
 POST {llm.baseUrl}/chat/completions
@@ -30,7 +30,7 @@ Authorization: Bearer {apiKey}
 { model, messages: [system, user], temperature, max_tokens }
 ```
 
-| 维度 | Summarizer（概括/日报） | ChatBot（群聊） |
+| 维度 | Summarizer（概括/日报） | ChatBrain（群聊，plugins/chat.js） |
 |---|---|---|
 | 请求形状 | system=「严谨简洁的群聊分析助手」+ user=完整结构化 prompt | system=长人设提示（PRTS + 群聊规则 + 匿名机制 + 知识上下文段） |
 | temperature | 0.7 | 0.8 |
@@ -40,7 +40,7 @@ Authorization: Bearer {apiKey}
 | 成功副作用 | 无 | 追加群上下文历史（失败不写） |
 | 响应取值 | `choices[0].message.content.trim()`；空则抛错 | 同左 |
 
-错误统一为 `LLM API 错误 <status>: <body 前 N 字>`（Summarizer 500 / ChatBot 300）。
+错误统一为 `LLM API 错误 <status>: <body 前 N 字>`（Summarizer 500 / ChatBrain 300）。
 
 ## 3. 三个 Wiki 检索器（MediaWiki 家族）
 
@@ -55,9 +55,9 @@ Authorization: Bearer {apiKey}
 | 话题门 | 仅方舟相关问题（`isArknightsRelated` 词表+关卡正则）才检索 | 无条件检索（萌娘命中方舟梗兜底 17 个主词条页） | 仅**非**方舟问题且 `enabled===true`（需代理） |
 | 并入上下文 | topK=3 | topK=2 | topK=2 |
 
-共享纯函数（wiki.js 导出，moegirl/wikipedia/chat 复用）：`extractKeywords`（问句剥语气词）、`isArknightsRelated`。
+共享纯函数（core/wiki.js 导出，moegirl/wikipedia 检索器与 chat 插件复用）：`extractKeywords`（问句剥语气词）、`isArknightsRelated`。
 
-## 4. ArknightsGameData 下载（src/refresher.js）
+## 4. ArknightsGameData 下载（core/refresher.js）
 
 - 镜像源（按序 fallback）：jsDelivr CDN → GitHub raw。
 - 4 表：干员表 / 档案 / 藏品 / 卡池（`zh_CN/gamedata/excel/`）。
@@ -66,6 +66,6 @@ Authorization: Bearer {apiKey}
 - 原子写入：`.tmp` → 旧文件备份 `.bak` → rename；90s 请求超时。
 - 上游数据结构约定（ArkDB 消费面）：character_table（`.characters` 或扁平）、handbook `.handbookDict`、藏品递归找 `type==='RELIC'`、卡池 `.gachaPoolClient`。
 
-## 5. 匿名机制（chat.js 内部约定）
+## 5. 匿名机制（plugins/chat.js ChatBrain 内部约定）
 
 群上下文与 LLM prompt 中不出现真实昵称：`_speakerLabel` 按群维护「昵称/QQ → 群友N」映射（每群上限 200，先到先得，满了才逐出）；system prompt 明确告知模型「群友N 是匿名代号」。该状态只存内存、不落盘、重启即清。

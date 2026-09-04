@@ -21,11 +21,11 @@
 | 文档 | 内容 | 建议读者 |
 |---|---|---|
 | [index.md](index.md) | 本文档：地图 + 源码注释规范 | 所有人 |
-| [architecture.md](architecture.md) | **总体架构**：目录结构、模块职责表、启动装配顺序、消息路由链（S1–S13）、后台编排流程（回填/日报/数据刷新）、静态依赖图、已知怪癖与坑 | 改代码前必读 |
+| [architecture.md](architecture.md) | **总体架构**：目录结构（core/plugins 重构后）、模块职责表、启动装配顺序、消息路由链（S1–S7 + 插件分发带）、后台编排流程（回填/日报/数据刷新）、静态依赖图、已知怪癖与坑 | 改代码前必读 |
 | [config-reference.md](config-reference.md) | `config.json` 全部配置键：类型/默认值/消费模块/备注（含**死配置**标注） | 部署者、功能开发 |
 | [data-format.md](data-format.md) | `data/` 下全部数据文件：布局、行/记录格式、读写方、损坏容错 | 维护者、迁移 |
 | [external-apis.md](external-apis.md) | 对外接口面：OneBot 11 WS 使用面、LLM `/chat/completions` 调用形状（两调用点差异）、三个 Wiki API 的检索与限流、ArknightsGameData 下载与校验 | 调试联调 |
-| [refactor-proposal.md](refactor-proposal.md) | **重构提案（未实施）**：「core 主运行库 + 插件注册 + 插件」目标架构、行为保真清单、P0–P4 迁移路线 | 立项讨论 |
+| [refactor-proposal.md](refactor-proposal.md) | **重构决策存档**：「core 主运行库 + 插件注册 + 插件」目标架构与行为保真清单、P0–P4 迁移记录（**P0–P3 已实施**）；仍在待办：死配置修复、LLM 加固等独立立项项 | 结构改动前必读 |
 
 ## 源码注释规范（house style）
 

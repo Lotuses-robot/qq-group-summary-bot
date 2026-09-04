@@ -37,7 +37,7 @@ data/
 
 ## 2. state 状态（JSON 覆盖写）
 
-- `state/<群号>.json` → `{"lastSummaryAt": <秒>}`——`doSummary` 在**发送成功后**才推进（`store.setLastSummaryAt`）；删除即下次从当前时段重新概括。
+- `state/<群号>.json` → `{"lastSummaryAt": <秒>}`——summary 插件在**发送成功后**才推进（`store.setLastSummaryAt`）；删除即下次从当前时段重新概括。
 - `state/lastSeen.json` → `{"lastSeenTs": <秒>}`——**全局单值、只增不减**；addMessage 与 backfill 写入；解析失败按 0（backfill 退化为拉满 `backfill.maxHours`）。
 
 ## 3. SQLite（data/messages.db，node:sqlite 同步接口）
