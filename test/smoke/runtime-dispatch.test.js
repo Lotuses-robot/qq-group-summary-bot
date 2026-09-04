@@ -145,6 +145,27 @@ describe('createApp 全链（P3 五插件装配面）', () => {
     assert.deepEqual(sent, [{ gid: 9, msg: '@博士 艾特PRTS干什么呀喵' }]);
   });
 
+  it('紧贴 @ 无空格的整串不触发任何插件：落 S10 空@ 提示（2026-09 决策，见 architecture §8 坑 11）', async () => {
+    // 输入形态：at 段（缺 name → rec.text 为 @10001）紧贴文本「总结」无空格——整串被
+    // extractQuestion 前导正则吞掉 → 问题为空 → S10 固定回复；不回显旧 S8「全文判关键词」
+    // 的触发（关键词/指令判定基准 = 剥 @ 后问题文本，属既定语义，勿按旧行为回退）
+    const { send, sent, calls } = mkApp();
+    send({
+      post_type: 'message',
+      message_type: 'group',
+      group_id: 9,
+      user_id: 555,
+      sender: { card: '博士', nickname: '博士' },
+      message: [
+        { type: 'at', data: { qq: 10001 } },
+        { type: 'text', data: { text: '总结' } }, // 无前导空格：紧贴 at 段
+      ],
+    });
+    assert.deepEqual(sent, [{ gid: 9, msg: '@博士 艾特PRTS干什么呀喵' }]);
+    assert.equal(calls.summarize, 0); // 不回显总结
+    assert.equal(calls.brainChat, null);
+  });
+
   it('start()/stop()：webui.enabled=false 不起面板，stop 走 registry 逆序并关 client', () => {
     const { app, calls } = mkApp();
     app.start(); // 不抛（webui 不 listen；refresh schedule disabled 不挂定时器；scheduler fake）

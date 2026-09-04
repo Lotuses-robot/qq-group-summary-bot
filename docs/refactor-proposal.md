@@ -37,7 +37,7 @@ test/                 # node:test（无新依赖）：baseline/（行为基线�
 
 - 消息入库 + analytics.record 先于一切；非 @、静默时段消息照常入库。
 - @检测：at 段字符串全等 + 文本`@selfId` + 子串`@机器人/@PRTS`。
-- 静默吞掉全部 @ 行为；手动总结关键词对问题文本 includes 判定（**差异见下方 P3b 记录**）。
+- 静默吞掉全部 @ 行为；手动总结关键词对**剥 @ 后的问题文本** includes 判定（判定基准的旧序差异见下「行为差异与决策」，已定案不回退）。
 - 空 @ → 固定回复「@sender 艾特PRTS干什么呀喵」（core，分发前）。
 - chat 恒在分发带末端（原「严格 null 才落 chat」内化，行为不变）；chat 不 await；`setLastSummaryAt` 在发送成功后；抽卡记录在回复前落库；chat 历史只在 LLM 成功后写。
 - cache key `q:<question>` 跨群共享；知识缓存 set 在 LLM 调用前。
@@ -54,9 +54,10 @@ test/                 # node:test（无新依赖）：baseline/（行为基线�
 - **report/webui 仅 hooks、priority 0**（不占 300/200 带）：无消息面却要参与 startAll 排序的场景归 0 带，handleMessage 恒 null；registry 测试断言 PRIORITY keys，新增占带名须同步测试。✅
 - **core/ 不 import 任何 plugins** ⚠️ 未完全达成：runtime.js（装配者，位于 core/）必须 import 各插件工厂——这是唯一豁免，插件侧仍零 core 服务 import（只 import logger/registry 常量/wiki 纯函数/store 工具）。
 
-## P3 期间发现的行为差异（保真清单补充，勿当 bug 顺手修）
+## P3 期间发现的行为差异（已决策：保持现语义，不回退）
 
-- **总结关键词判定基准**（P3b 引入）：旧 S8 在剥 @ 前对**含 @ 的完整文本**判关键词、先于空 @ 判定；现 summary 插件对**剥 @ 后问题文本**判、在 S10 之后。常规「@机器人 总结」（带空格/@ 段后另起文本）等价；差异仅出现在**无空白紧贴 @ 的一整串**且整串含关键词（如文本「@PRTS总结」、at 段缺 name 时「@10001总结」）：旧代码触发手动总结，现代码整串被 extractQuestion 吞掉 → 回「艾特PRTS干什么呀喵」。触发面窄但属实，修复需立项（改判定基准回剥 @ 前 / 调整 extract 段边界，均触及红线）——详见 architecture.md §8 坑 11。
+- **总结关键词判定基准**（P3b 引入）：旧 S8 在剥 @ 前对**含 @ 的完整文本**判关键词、先于空 @ 判定；现 summary 插件对**剥 @ 后问题文本**判、在 S10 之后。常规「@机器人 总结」（带空格/@ 段后另起文本）等价；差异仅出现在**无空白紧贴 @ 的一整串**且整串含关键词（如文本「@PRTS总结」、at 段缺 name 时「@10001总结」）：旧代码触发手动总结，现代码整串被 extractQuestion 吞掉 → 回「艾特PRTS干什么呀喵」。
+- **决策（2026-09）**：不回退——关键词/指令判定基准统一为剥 @ 后的有效文本，紧贴 @ 无空格的整串不应通过（更符合逻辑）。已由 runtime-dispatch 锁定测试固化（「紧贴 @ 无空格的整串不触发任何插件」），详见 architecture.md §8 坑 11。
 
 ## 迁移路线（已全部执行；每阶段独立 commit、可运行可验证）
 
@@ -76,7 +77,7 @@ test/                 # node:test（无新依赖）：baseline/（行为基线�
 4. chat 历史 pushMessage 位置保持在 LLM 成功之后
 5. gacha 记录先于单抽、负向前瞻正则勿合并（gacha 插件内）
 6. extractQuestion 只剥 1–2 前导 @，尾部 @ 原样入 chat——勿"修复"（连带 §P3 差异项）
-7. 手动总结按 ctx.text 判（防漏尾部 @ 消息）——**注意其与旧 S8 完整文本判的残余差异，见 P3 差异记录**
+7. 手动总结按 ctx.text（剥 @ 后）判：尾部 @ 文本不阻断关键词命中；与旧 S8 完整文本判的差异已定案不回退（见「P3 期间发现的行为差异」）
 8. 空@回复与关键词检查的旧序差异仅当关键词含 @ 时出现 → README/architecture 已注明
 9. core/ 下移后默认路径核对（`__dirname/..` 仍指根 data/）——P1 已核对
 10. 注册顺序 + 稳定排序须确定性（registry 测试）
@@ -84,5 +85,4 @@ test/                 # node:test（无新依赖）：baseline/（行为基线�
 ## 待办（与重构无强耦合，可独立立项；P4 收尾后仍开放）
 
 - **死配置修复**：`schedule.hour/minute` 与 `report.hour` 从未生效（Scheduler 只读 `dailyHour/dailyMinute`），日报恒 9:00——修复需决策"让哪个键生效"并保持默认 9:00（runtime.js 装配处已标 TODO 注释；README 已如实标注死配置）。
-- **总结关键词判定基准对齐**（P3b 差异，见上「P3 期间发现的行为差异」）：需立项决策后小改 core 路由或 extractQuestion 语义。
 - **加固**：Summarizer 与 ChatBrain 的 LLM 调用、moegirl fetch 均无 HTTP 超时/重试；wsConnected 断线不复位（面板状态假象）；首次 SQLite 导入同步阻塞；`package.json` engines(≥18) 与 node:sqlite(≥22.5) 不符。
