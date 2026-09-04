@@ -65,15 +65,23 @@ export function createApp(config, overrides = {}) {
   const dataDir = path.resolve(root, config.dataDir || './data');
   const llm = config.llm || {};
 
+  // 日报配置（report.*）：触发时刻 hour/minute（默认 9:00）——2026-09 立项修复：旧
+  // schedule.hour/minute 与 report.hour 遗读均为死键，现 report.* 生效、schedule.* 废弃
+  // （见 config.example 与 refactor-proposal 待办）；userId 私聊收件人、minMessages 活跃群门槛
+  const report = config.report || {};
+  const reportHour = report.hour ?? 9;
+  const reportMinute = report.minute ?? 0;
+  const reportUserId = report.userId || 0;
+  const reportMinMessages = report.minMessages ?? 100;
+
   const store = overrides.store || new MessageStore(dataDir);
   const client = overrides.client || new NapCatClient(config.napcat.wsUrl, {
     selfId: config.napcat.selfId || 0,
     accessToken: config.napcat.accessToken || '',
   });
   const summarizer = overrides.summarizer || new Summarizer(llm);
-  // TODO(死配置，见 refactor-proposal.md 待办)：config.schedule.hour/minute 从未生效——Scheduler
-  // 只解构 dailyHour/dailyMinute（config 里没人写这两个键），日报恒 9:00。修复需立项决策，勿顺手改。
-  const scheduler = overrides.scheduler || new Scheduler(config.schedule || {});
+  // 触发时刻取 report.hour/minute（上段派生）；Scheduler 内部参数名仍为 dailyHour/dailyMinute
+  const scheduler = overrides.scheduler || new Scheduler({ dailyHour: reportHour, dailyMinute: reportMinute });
   const analytics = overrides.analytics || new Analytics(path.join(dataDir, 'messages.db'), path.join(dataDir, 'messages'));
   const refresher = overrides.refresher || new DataRefresher(path.join(dataDir, 'ark'), config.dataRefresh || {});
 
@@ -98,14 +106,6 @@ export function createApp(config, overrides = {}) {
   // startedAt：启动时刻（供 WebUI 状态页 uptime）；WS 在线标志 wsConnected 并入下方 state
   //（断开经 napcat 合成 disconnect 事件复位、重连后 connect 事件置回——2026-09 修复坑 2）
   const startedAt = Date.now();
-
-  // 日报配置（report.*）：userId 私聊收件人、minMessages 活跃群消息门槛（默认 100）。
-  // TODO(死配置，同 refactor-proposal.md 待办)：report.hour 从未生效——下行 dailyHour 是无消费方
-  // 的遗读（report 插件只注入 userId/minMessages，触发时刻恒 9:00 由 Scheduler 缺省），勿顺手删/改。
-  const report = config.report || {};
-  const reportUserId = report.userId || 0;
-  const reportMinMessages = report.minMessages ?? 100;
-  const dailyHour = report.hour ?? 9;
 
   // 静默时段配置（quiet.*）：默认 0:00–8:00；enabled !== false 视为开启（S7 判定用）
   const quiet = config.quiet || {};
@@ -224,7 +224,7 @@ export function createApp(config, overrides = {}) {
     // 启动收尾：connect 异步建 WS（置 closed 后不再重连）
     client.connect();
 
-    log('QQ 群聊概括机器人已启动（仅 @ 触发总结；每日 9:00 发送昨日日报）');
+    log(`QQ 群聊概括机器人已启动（仅 @ 触发总结；每日 ${reportHour}:${String(reportMinute).padStart(2, '0')} 发送昨日日报）`);
   }
 
   /** 优雅停服（退出信号与测试共用）：registry.stopAll（webui 关面板、report 停调度、refresh 清定时器）→ 关 WS；不 exit（信号路径自行 exit） */

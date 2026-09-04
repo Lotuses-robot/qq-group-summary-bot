@@ -22,10 +22,9 @@
 | `napcat.selfId` | number | `0` | routing（S3 过滤/S1 connect 回填起点） | 机器人 QQ 号；为 0 时连接后经 `get_login_info` 回填 |
 | `napcat.accessToken` | string | `''` | NapCatClient | 拼到 WS URL 的 `?access_token=` |
 | `groups` | number[] | `[]` | routing（S4 白名单/backfill 群集合）+ report/refresh 插件（经 runtime 注入 trackedGroups） | 监控群白名单；**空数组 = 全部群** |
-| `schedule` | object | `{}` | Scheduler（core/platform/scheduler.js） | ⚠️ **死配置**：只解构 `dailyHour/dailyMinute`，而 example 里是 `hour/minute`——日报实际恒 9:00（见 architecture §8 坑 1） |
 | `report.userId` | number | `0`（= 不发送） | report 插件（plugins/report.js） | 日报私聊接收 QQ（**必填**才发日报） |
 | `report.minMessages` | number | `100` | report 插件 | 昨日消息数 ≥ 该值的群才生成日报 |
-| `report.hour` | number | `9` | — | ⚠️ **死配置**：runtime 仅遗读进无用变量（坑 1，已标 TODO）；恒 9:00 |
+| `report.hour` / `report.minute` | number | `9` / `0` | Scheduler（core/platform/scheduler.js，经 runtime 装配传参） | 日报触发时刻（2026-09 修复后生效；旧 `schedule.*` 死键已废弃，见备忘） |
 | `quiet.enabled` | boolean | `true` | routing（S7） | 静默时段开关 |
 | `quiet.start` / `quiet.end` | number | `0` / `8` | routing（S7） | 小时制 `[start, end)`；start>end 视为跨零点 |
 | `minMessages` | number | `1` | summary 插件（doSummary） | 手动总结低于该消息条数时跳过 |
@@ -81,4 +80,4 @@
 - llm.* 是「一个块、两类消费者」——总结与聊天共享 key 但各自读字段，改造配置时两者都要考虑。
 - wiki/moegirl/wikipedia 三个检索器共享 `config.llm` 整对象作为构造参数，各自只挑自己前缀的键。
 - `dataRefresh.announce`、`llm.chatEnabled`、`webui.token` 等"看起来是开关"的键语义不一：有的 `!== false`（默认开）、有的 `=== true`（默认关）、有的按 truthy——改动前对照上表默认列。
-- `schedule` 与 `report.hour` 是**死配置**（见上表 ⚠️），example 模板与 README 均已如实标注；修复需立项（refactor-proposal 待办），勿顺手改。
+- 日报触发时刻 = `report.hour/minute`（缺省 9:00，2026-09 起真正生效，见上表）；旧 `schedule.*` 是**从未生效的死键**（`Scheduler` 只读 `dailyHour/dailyMinute` 而装配传错对象，architecture §8 坑 1）——现整块废弃不再读取，example 已移除该节，历史 config.json 残留无害。

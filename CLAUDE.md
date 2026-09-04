@@ -30,8 +30,8 @@ QQ 群聊机器人（NapCat / OneBot 11 / WS），Node ESM，LLM 生成群聊概
 1. **路由链次序即契约**：S1–S7（消息入库 → @检测 → 静默门）与 S9/S10（剥 @、空@ 固定回复）在 core/routing.js（P5 起自 runtime.js 拆出，runtime 装配期 createRouting 挂载，顺序与文案未改）；其后的产品行为全部经 registry 分发带（priority 降序）：summary 900（总结关键词）→ refresh 800（刷新指令）→ 四个指令插件 700–400 → chat 300 末端恒消费（report/webui 仅 hooks 不占带）。任何"看起来更合理"的重排都可能改变现网行为；带序常量在 core/registry.js 的 `PRIORITY`（**测试锁定 keys，新增占带名须同步 registry 测试**）。
 2. **消息入库是同步 `appendFileSync` 且先于一切路由**——不得异步化或加锁（现状：写失败中断该消息路由）。
 3. **@匹配语义**：at 段字符串全等；`@机器人`/`@PRTS` 大小写敏感子串匹配；剥 @ 只剥 1–2 段**前导**的，尾部 @ 原样保留。**关键词/指令判定统一基于剥 @ 后的有效文本**——紧贴 @ 无空格的整串（如 `@PRTS总结`）不触发任何指令/总结、落 S10 空@ 提示（既定语义，勿按旧「含 @ 全文判」回退）。
-4. **死配置不要修**：`schedule.hour/minute`、`report.hour` 从未生效（定时恒 9:00）。修它需要立项决策（见 refactor-proposal 待办，runtime.js 装配处已标 TODO 注释），别在路过时改。
-5. **语义保持**：知识缓存键 `q:<问题>` 跨群共享（勿加群号前缀）；`wsConnected` 断线不复位（面板状态假象，已知）；Summarizer 与 ChatBrain 的 LLM 默认值（maxTokens 2048/1024、temperature 0.7/0.8）与"无超时/无重试"现状别单方面"加固"。
+4. **日报触发时刻 = `report.hour/minute`**（缺省 9:00；2026-09 立项修复：旧 `schedule.hour/minute` 与 `report.hour` 遗读是死键已废弃，`config.schedule` 整块不再读取）。改键名/触发语义先立项讨论。
+5. **语义保持**：知识缓存键 `q:<问题>` 跨群共享（勿加群号前缀）；Summarizer 与 ChatBrain 的 LLM 默认值（maxTokens 2048/1024、temperature 0.7/0.8）与两套 prompt 文案别单方面改（LLM/moegirl HTTP 无超时/重试的加固已立项，落地前勿动调用点）。
 6. **指令 14 条规则顺序即优先级**：规则按域拆在 4 个指令插件（plugins/lingo.js 词典、ark.js 干员藏品、gacha.js 抽卡、stats.js 统计）——域内序 = 文件内代码序、域间序 = PRIORITY 带（700 > 600 > 500 > 400）。抽卡记录必须先于单抽；负向前瞻正则勿合并。
 7. **抽卡/干员/藏品的概率与过滤逻辑在 core/knowledge/arkdb.js 内**，命令层（插件）只做格式化与落库；概率/可获取性改动需走游戏数据事实，不拍脑袋。
 
@@ -56,7 +56,7 @@ QQ 群聊机器人（NapCat / OneBot 11 / WS），Node ESM，LLM 生成群聊概
 - 不要在无讨论的情况下启动大规模结构改动（core/plugins 边界的移动会牵动注入面与测试）；
 - 新增功能时**不必**为未来抽象提前设计——指令/后台流程按当前惯例写进对应插件与装配段即可；
 - 若你发现"为加一个小功能必须动 runtime 路由链 + registry 分发语义"，先对照 refactor-proposal 剩余待办讨论，而不是临时发明第二套注册机制；
-- 独立待办（死配置修复、LLM 无超时/重试加固）尚未立项，别顺手修——见 refactor-proposal「待办」。
+- 独立待办（LLM/moegirl 网络调用无超时/重试的加固）已立项、按序落地中——对应 commit 完成前别顺手改其他调用点，见 refactor-proposal「待办」。
 
 ## 仓库约定
 

@@ -56,7 +56,7 @@ src/            Node ESM；入口 src/index.js（引导 17 行：import { main }
     stats.js      ◇ 统计指令（活跃榜/群统计——规则 12–14，带 400）
     summary.js    手动总结插件（带 900 = 原 S8；关键词认领 + per-group 互斥 + doSummary 编排）
     refresh.js    数据刷新插件（带 800 = 原 S11；指令认领 + hooks.start 自动定时器 + api.refresh 公共 runner）
-    report.js     日报插件（仅 hooks：hooks.start 注册每日 9:00 调度）
+    report.js     日报插件（仅 hooks：hooks.start 注册每日调度，时刻取 report.hour/minute，缺省 9:00）
     chat.js       AI 群聊（ChatBrain）+ 兜底分发插件（带 300 = 原 S13，分发带末端恒消费）
     webui.js      Web 管理面板（仅 hooks：hooks.start 按配置 listen；stop() 关停）
 test/           node:test（npm test）
@@ -75,9 +75,9 @@ P1 起装配与启动拆两层：`createApp(config, overrides)` **纯装配零�
 
 1. 读配置（main）：`CONFIG_PATH` 环境变量 → `config.json`；`llm.apiKey` 缺失回退 `LLM_API_KEY`；仍空 → `err` + `process.exit(1)`。
 2. createApp 按依赖序构造（缺省全部实建，overrides 同名键覆盖实例）：
-   `MessageStore(dataDir)`（建 data/messages/、data/state/）→ `NapCatClient(wsUrl, {selfId, accessToken})`（此刻不连）→ `Summarizer(llm)` → `Scheduler(config.schedule)`（注意：只解构 `dailyHour/dailyMinute`，见 §8 坑 1）→ `Analytics(dataDir/messages.db, dataDir/messages)`（SQLite 建表）→ `DataRefresher(dataDir/ark, dataRefresh)` → 知识服务上移为共享单例：`LingoStore / ArkDB / KnowledgeCache / WikiRetriever / MoegirlRetriever / WikipediaRetriever` → `ChatBrain({cfg, lingo, arkdb, cache, wiki, moegirl, wikipedia})`（构造注入，替代旧 ChatBot 构造内 new 7 子服务）→ `PluginRegistry` → `createRouting(...)`（P5b：S1–S13 路由判定域工厂，core/routing.js；**先于插件注册**——report 插件依赖其产出的 getAllGroupIds）→ 就地构造插件并 register：commandPlugins（plugins/index.js 静态交付）+ summary/refresh/report/chat/webui 五工厂（依赖本闭包实例与就绪标志，createApp 内 createXxxPlugin(deps)）→ 预载 → `client.onEvent(onEvent)` 挂载路由（判定域挂载点）。
+   `MessageStore(dataDir)`（建 data/messages/、data/state/）→ `NapCatClient(wsUrl, {selfId, accessToken})`（此刻不连）→ `Summarizer(llm)` → `Scheduler({dailyHour, dailyMinute})`（时刻取 `report.hour/minute`，缺省 9:00；旧 `schedule.*` 键废弃，见 §8 坑 1）→ `Analytics(dataDir/messages.db, dataDir/messages)`（SQLite 建表）→ `DataRefresher(dataDir/ark, dataRefresh)` → 知识服务上移为共享单例：`LingoStore / ArkDB / KnowledgeCache / WikiRetriever / MoegirlRetriever / WikipediaRetriever` → `ChatBrain({cfg, lingo, arkdb, cache, wiki, moegirl, wikipedia})`（构造注入，替代旧 ChatBot 构造内 new 7 子服务）→ `PluginRegistry` → `createRouting(...)`（P5b：S1–S13 路由判定域工厂，core/routing.js；**先于插件注册**——report 插件依赖其产出的 getAllGroupIds）→ 就地构造插件并 register：commandPlugins（plugins/index.js 静态交付）+ summary/refresh/report/chat/webui 五工厂（依赖本闭包实例与就绪标志，createApp 内 createXxxPlugin(deps)）→ 预载 → `client.onEvent(onEvent)` 挂载路由（判定域挂载点）。
 3. 预载「今天」窗口：`for (gid of config.groups) store.loadFromDisk(gid)`（groups=[] 则什么都不预载；日报/概括按需另载日期段）。
-4. `start()`：注册 `SIGINT/SIGTERM`（stop() → `process.exit(0)`）→ `registry.startAll()`（按 priority 降序调插件 hooks.start，实际执行序：refresh 注册数据自动刷新定时器[§6.3 触发源 a] → report 排下一个每日 9:00 日报[经 scheduler.start] → webui 按 `webui.enabled !== false` 起面板；旧 start 内 setTimeout/scheduler.start/WebUI 直建段全部迁入插件）→ `client.connect()`。
+4. `start()`：注册 `SIGINT/SIGTERM`（stop() → `process.exit(0)`）→ `registry.startAll()`（按 priority 降序调插件 hooks.start，实际执行序：refresh 注册数据自动刷新定时器[§6.3 触发源 a] → report 排下一个每日日报[经 scheduler.start，触发时刻取 report.hour/minute（缺省 9:00）] → webui 按 `webui.enabled !== false` 起面板；旧 start 内 setTimeout/scheduler.start/WebUI 直建段全部迁入插件）→ `client.connect()`。
 5. WS open 后 NapCat 合成 `lifecycle/connect` 事件 → routing S1 段置 `state.ready/wsConnected`（state 为 runtime 与 routing 共享的可变状态对象）→ 回填 selfId（若 0）→ `backfillHistory()`（仅一次）。
 6. `stop()`（信号路径与测试共用）：`registry.stopAll()`（priority 逆序：webui 关面板 → report 停调度 → refresh 清定时器）→ `client.close()`。
 
@@ -155,7 +155,7 @@ S# 编号保留为行为契约锚点（CLAUDE.md 红线与 refactor-proposal 保
 
 `sinceTs = max(store.getLastSeenTs(), now − backfill.maxHours×3600)`（默认 72h）；群集合 = `config.groups` 非空用之，否则 `get_group_list`（失败回退磁盘已跟踪群）；每群 `get_group_msg_history(message_seq:0, count:1000)` → 过滤 `time ≥ sinceTs` 与批内重复 → 逐条 `store.addHistoryMessage`（与内存/磁盘双去重）+ `analytics.record`；整批有新增才 `setLastSeenTs(latest)`（全局单值，只增不减）；单群失败记日志继续。
 
-### 6.2 每日日报 dailyReport（report 插件，hooks.start 经 scheduler.start 注册 9:00 回调）
+### 6.2 每日日报 dailyReport（report 插件，hooks.start 经 scheduler.start 注册每日回调，时刻取 `report.hour/minute`，缺省 9:00）
 
 调度器实例归 report 插件所有：hooks.start → `scheduler.start(dailyReport)`（core/platform/scheduler.js 自驱每日循环），hooks.stop → `scheduler.stop()`（旧实现由 runtime 信号路径直调）。编排口径：守卫 `ready` + 配置了 `report.userId`。**昨日本地自然日** `[昨日00:00, 今日00:00)`；每群 `store.loadFromDisk(gid, yesterdayStart, todayStart)` 载入该日期段再 `collectRange` + 敏感过滤；消息数 ≥ `report.minMessages`(100) 才算活跃群；逐群 `summarizer.summarize(...,'daily')`，单群失败继续；全部失败则不发送；成功则私聊发给 `report.userId`。**不写任何 lastSummaryAt/lastSeen 状态**。
 
@@ -185,7 +185,7 @@ filter.js 零 import；plugins 间零互 import（服务一律经 createApp 注�
 
 ## 8. 已知怪癖与坑（改代码前必读）
 
-1. **死配置（bug）**：`config.schedule.hour/minute` 与 `config.report.hour` **从未生效**——`Scheduler` 解构的是 `dailyHour/dailyMinute`，装配传的是 `schedule` 对象，实际恒为 **9:00**；runtime.js 里 `dailyHour = report.hour ?? 9` 是无消费方的遗读（已标 TODO 注释）。README 早年声称可配，实为假象。修复见 refactor-proposal 待办，勿在此处顺手改。
+1. ~~**死配置（bug）**~~（2026-09 已修复）：`config.schedule.hour/minute` 与 `config.report.hour` 曾**从未生效**——`Scheduler` 解构的是 `dailyHour/dailyMinute` 而装配传的是 `schedule` 对象、`report.hour` 遗读无消费方，日报恒 **9:00**。2026-09 立项决策「`report.*` 生效」：现 runtime 装配处从 `config.report.hour/minute`（缺省 9/0）取值构造 `Scheduler`；`schedule.*` 整块废弃不再读取（example 已移除该节）。
 2. ~~**wsConnected 永不复位**~~（2026-09 已修复）：WS 断开时 napcat 合成 `lifecycle/disconnect` 事件，routing S1 复位 `wsConnected`——WebUI 状态页如实显示离线；重连后 connect 事件置回 true。断线期间无入站事件，`ready`/`backfillDone` 语义不受影响。
 3. **缓存键跨群共享**：知识缓存 `q:<question>` 不含群号/提问人前缀，同问题在不同群命中同一缓存（含内容已过 TTL 判定）。属既有语义。
 4. **store 同步 IO 在路由热路径**：`addMessage` 同步 `appendFileSync`，写在一切路由判断之前；写失败异常会中断该消息的路由（不入 analytics、不回复）。异步化或加锁会改变现有行为。

@@ -86,7 +86,6 @@ function mkApp() {
     dataRefresh: { enabled: false },
     report: { userId: 0 },
     webui: { enabled: false }, // 面板不起（避免真实 listen 端口）
-    schedule: {},
   }, {
     store, client, summarizer: { summarize: async () => { calls.summarize++; return 'S'; } },
     scheduler, analytics: { record: () => {}, countMessages: () => 0 },

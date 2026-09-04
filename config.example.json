@@ -5,10 +5,6 @@
     "accessToken": ""
   },
   "groups": [],
-  "schedule": {
-    "hour": 9,
-    "minute": 0
-  },
   "llm": {
     "apiKey": "",
     "baseUrl": "https://api.deepseek.com/v1",
@@ -42,7 +38,8 @@
   "report": {
     "userId": 0,
     "minMessages": 100,
-    "hour": 9
+    "hour": 9,
+    "minute": 0
   },
   "quiet": {
     "enabled": true,

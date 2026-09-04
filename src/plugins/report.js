@@ -28,7 +28,8 @@ import { log, err } from '../core/platform/logger.js';
  * @param {Object} deps.store - MessageStore 实例（loadFromDisk/collectRange）
  * @param {Object} deps.client - NapCatClient 实例（getGroupInfo 群名 / sendPrivateMsg 发送）
  * @param {Object} deps.summarizer - Summarizer 实例（LLM 概括，mode 'daily'）
- * @param {Object} deps.scheduler - Scheduler 实例（每日 9:00 循环调度，start 在 hooks.start 注册）
+ * @param {Object} deps.scheduler - Scheduler 实例（每日循环调度，触发时刻由构造传参决定——runtime 按
+ *   report.hour/minute 装配，缺省 9:00；start 在 hooks.start 注册）
  * @param {Function} deps.filterMessages - (recs) => {kept, filtered} 敏感过滤包装（同 summary 插件）
  * @param {Function} deps.trackedGroups - () => Array，config.groups 访问器
  * @param {Function} deps.getAllGroupIds - () => Promise<Array>，活跃群集合（与 routing backfillHistory 共用）

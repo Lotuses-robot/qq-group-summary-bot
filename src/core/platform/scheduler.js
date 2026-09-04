@@ -1,7 +1,11 @@
-// 每日定时调度模块：在指定时刻（默认 9:00）触发一次任务，执行完自动安排下一天，当前用于「每日 9:00 群活跃日报」的定时触发。
+// 每日定时调度模块：在指定时刻（缺省 9:00，时刻由装配方按 report.* 传入）触发一次任务，
+// 执行完自动安排下一天，当前用于「每日群活跃日报」的定时触发。
 // 导出：Scheduler（class；对外接口 start/stop）。
-// 依赖：./logger.js（log/err）；唯一实例化点 core/runtime.js：createApp 装配 new Scheduler(config.schedule || {})——start(dailyReport) 由 report 插件 hooks.start 调用、stop() 由其 hooks.stop 调用。
-// 数据：不读写任何文件；触发时刻由实例化方传入（config.schedule 的 dailyHour/dailyMinute，缺省 9:00）。注意 schedule.hour/minute 与 report.hour 均为从未生效的死键（见 refactor-proposal 待办与 runtime.js 装配处 TODO），实际恒 9:00，勿顺手改。
+// 依赖：./logger.js（log/err）；唯一实例化点 core/runtime.js：createApp 装配
+// new Scheduler({ dailyHour, dailyMinute })——时刻取 report.hour/minute（缺省 9:00；旧
+// config.schedule 整块 2026-09 起废弃不读）；start(dailyReport) 由 report 插件 hooks.start
+// 调用、stop() 由其 hooks.stop 调用。
+// 数据：不读写任何文件；触发时刻完全由实例化方传入（本类参数名 dailyHour/dailyMinute）。
 
 import { log, err } from './logger.js';
 

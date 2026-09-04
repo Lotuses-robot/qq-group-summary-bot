@@ -9,7 +9,7 @@
 - 实时接收群消息，本地持久化（JSONL + SQLite 双份）
 - 群里 **@机器人** 触发「群聊概括」（LLM 生成）与「AI 群聊」（带上下文记忆）
 - **@机器人 说指令**时走确定性指令（词典学习/干员查询/抽卡/统计等），不消耗 LLM
-- 每天 9:00 私聊发送「昨日活跃群日报」
+- 每日私聊发送「昨日活跃群日报」（默认 9:00，可配 `report.hour/minute`）
 - AI 回答带**三级知识库**：本地梗词典 → PRTS.Wiki（方舟）→ 萌娘百科（通用 ACG），另有可选维基百科
 - 本地明日方舟数据库（干员/档案/藏品/卡池）支持秒回查询与真实卡池抽卡
 - 附带 Web 管理面板（`http://127.0.0.1:5210`）
@@ -22,10 +22,10 @@
 |---|---|---|
 | [index.md](index.md) | 本文档：地图 + 源码注释规范 | 所有人 |
 | [architecture.md](architecture.md) | **总体架构**：目录结构（core/plugins 重构后）、模块职责表、启动装配顺序、消息路由链（S1–S7 + 插件分发带）、后台编排流程（回填/日报/数据刷新）、静态依赖图、已知怪癖与坑 | 改代码前必读 |
-| [config-reference.md](config-reference.md) | `config.json` 全部配置键：类型/默认值/消费模块/备注（含**死配置**标注） | 部署者、功能开发 |
+| [config-reference.md](config-reference.md) | `config.json` 全部配置键：类型/默认值/消费模块/备注 | 部署者、功能开发 |
 | [data-format.md](data-format.md) | `data/` 下全部数据文件：布局、行/记录格式、读写方、损坏容错 | 维护者、迁移 |
 | [external-apis.md](external-apis.md) | 对外接口面：OneBot 11 WS 使用面、LLM `/chat/completions` 调用形状（两调用点差异）、三个 Wiki API 的检索与限流、ArknightsGameData 下载与校验 | 调试联调 |
-| [refactor-proposal.md](refactor-proposal.md) | **重构决策存档**：「core 主运行库 + 插件注册 + 插件」目标架构与行为保真清单、P0–P4 迁移记录（**P0–P3 已实施**）；仍在待办：死配置修复、LLM 加固等独立立项项 | 结构改动前必读 |
+| [refactor-proposal.md](refactor-proposal.md) | **重构决策存档**：「core 主运行库 + 插件注册 + 插件」目标架构与行为保真清单、P0–P4 迁移记录（**P0–P3 已实施**）；仍在待办：LLM/moegirl 网络调用加固等独立立项项 | 结构改动前必读 |
 
 ## 源码注释规范（house style）
 
